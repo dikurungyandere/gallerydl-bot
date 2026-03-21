@@ -495,31 +495,6 @@ class TestUtils(unittest.TestCase):
 class TestUploader(unittest.TestCase):
     """Tests for upload helpers."""
 
-    def test_chunk_files_exact_multiple(self):
-        from uploader import chunk_files
-        files = [str(i) for i in range(20)]
-        chunks = chunk_files(files, size=10)
-        self.assertEqual(len(chunks), 2)
-        self.assertEqual(len(chunks[0]), 10)
-        self.assertEqual(len(chunks[1]), 10)
-
-    def test_chunk_files_remainder(self):
-        from uploader import chunk_files
-        files = [str(i) for i in range(15)]
-        chunks = chunk_files(files, size=10)
-        self.assertEqual(len(chunks), 2)
-        self.assertEqual(len(chunks[1]), 5)
-
-    def test_chunk_files_empty(self):
-        from uploader import chunk_files
-        self.assertEqual(chunk_files([]), [])
-
-    def test_chunk_files_single(self):
-        from uploader import chunk_files
-        chunks = chunk_files(["a.jpg"])
-        self.assertEqual(len(chunks), 1)
-        self.assertEqual(chunks[0], ["a.jpg"])
-
     def test_upload_uses_target_chat_id(self):
         """upload_files must send to target_chat_id, not event.chat_id."""
         from uploader import upload_files
@@ -545,6 +520,33 @@ class TestUploader(unittest.TestCase):
         mock_client.send_photo.assert_called_once()
         call_args = mock_client.send_photo.call_args
         self.assertEqual(call_args[0][0], target)
+
+    def test_upload_multiple_files_sent_individually(self):
+        """Multiple files should be uploaded as individual sends, not albums."""
+        from uploader import upload_files
+        from task_manager import UserTask
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_media_group = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+        files = ["/tmp/a.jpg", "/tmp/b.jpg"]
+
+        asyncio.run(
+            upload_files(
+                client=mock_client,
+                target_chat_id=target,
+                ut=ut,
+                files=files,
+                status_message=mock_status,
+            )
+        )
+
+        self.assertEqual(mock_client.send_photo.await_count, 2)
+        mock_client.send_media_group.assert_not_called()
 
     # ------------------------------------------------------------------
     # split_large_file tests

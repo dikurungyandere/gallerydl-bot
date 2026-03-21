@@ -2,8 +2,8 @@
 gallerydl-bot: A Telegram bot that downloads media via gallery-dl and uploads
 it back to the user using Pyrogram (MTProto).
 
-All files are downloaded first via gallery-dl, then uploaded to Telegram in
-one batch.  Files larger than ~1950 MB are automatically split into numbered
+All files are downloaded first via gallery-dl, then uploaded to Telegram
+one-by-one.  Files larger than ~1950 MB are automatically split into numbered
 parts so they can be uploaded within Telegram's per-file limit and manually
 reassembled.  Video files are sent as streamable Telegram videos rather than
 documents.
@@ -38,6 +38,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+# Reduce noisy connection/session lifecycle logs from Pyrogram internals.
+logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Module-level config (populated in main()).
@@ -87,7 +90,7 @@ HELP_TEXT = (
     "📖 **How to use gallerydl-bot**\n\n"
     "1. Send a URL (e.g. an Instagram post, a Twitter/X post, a Reddit gallery…).\n"
     "2. The bot will download the media using `gallery-dl`.\n"
-    "3. All downloaded files are uploaded back to you (or a target chat) via Telegram.\n\n"
+    "3. Downloaded files are uploaded back to you (or a target chat) via Telegram, one by one.\n\n"
     "**Parallel downloads**\n"
     "You can send multiple URLs without waiting — each one starts a separate job. "
     "The status message for each job shows its job ID.\n\n"
@@ -98,7 +101,6 @@ HELP_TEXT = (
     "⚠️ **The bot must be added as an admin to the target channel/group first,**\n"
     "otherwise the upload will fail with a permissions error.\n\n"
     "**Limits**\n"
-    "• Albums are split into chunks of 10 (Telegram limit).\n"
     "• Files larger than ~1950 MB are automatically split into numbered parts\n"
     "  (``.001``, ``.002``, …). Reassemble with: "
     "`cat file.mp4.001 file.mp4.002 > file.mp4`\n"
@@ -297,7 +299,7 @@ async def _pipeline(
     """Run the full download → upload pipeline for a single job.
 
     All files are downloaded first via gallery-dl, then uploaded to Telegram
-    in one batch.  The status message is updated as files arrive so the user
+    one by one.  The status message is updated as files arrive so the user
     can see progress during long downloads.
     """
     last_edit: list = [0.0]
@@ -345,7 +347,7 @@ async def _pipeline(
             return
 
         # ----------------------------------------------------------------
-        # Step 2: Upload all downloaded files in one batch
+        # Step 2: Upload all downloaded files one by one
         # ----------------------------------------------------------------
         await safe_edit_message(
             status_message,
