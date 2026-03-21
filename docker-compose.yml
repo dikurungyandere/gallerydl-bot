@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# gallerydl-bot — docker-compose.yml
+# ---------------------------------------------------------------------------
+# Quick-start:
+#   1. cp .env.example .env  →  fill in your credentials
+#   2. docker compose up -d
+#
+# The Telegram session file is persisted in the named volume "bot_data" so
+# the bot doesn't need to re-authenticate on every restart.
+#
+# Web UI (optional):
+#   Set WEBUI=true in .env, then uncomment the "ports" block below.
+# ---------------------------------------------------------------------------
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist the Telegram session file across container restarts.
+      - bot_data:/app
+    # Uncomment the lines below when WEBUI=true to expose the status page.
+    # WEBUI_PORT must match the EXPOSE directive in Dockerfile (default 8080).
+    # ports:
+    #   - "${WEBUI_PORT:-8080}:${WEBUI_PORT:-8080}"
+
+volumes:
+  bot_data:

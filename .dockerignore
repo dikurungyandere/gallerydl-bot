@@ -1,0 +1,28 @@
+# Git / version control
+.git
+.gitignore
+
+# Environment files (never bake credentials into the image)
+.env
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Telegram session files (mounted via Docker volume instead)
+*.session
+*.session-journal
+
+# Test artifacts
+.coverage
+htmlcov/
+
+# Editor / OS artefacts
+.DS_Store
+*.swp
+*.swo
+Thumbs.db

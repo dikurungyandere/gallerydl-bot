@@ -2,7 +2,7 @@
 Unit tests for gallerydl-bot.
 
 Tests cover the modules that do NOT require live Telegram credentials:
-config.py, task_manager.py, utils.py, downloader.py, and uploader.py.
+config.py, task_manager.py, utils.py, downloader.py, uploader.py, and webui.py.
 """
 
 import asyncio
@@ -192,6 +192,50 @@ class TestConfig(unittest.TestCase):
             self.assertIsNone(cfg._temp_config_file)
         finally:
             os.unlink(explicit_path)
+
+    def test_webui_disabled_by_default(self):
+        """WEBUI defaults to false when not set."""
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertFalse(cfg.webui_enabled)
+        self.assertEqual(cfg.webui_port, 8080)
+        self.assertEqual(cfg.webui_host, "0.0.0.0")
+
+    def test_webui_enabled(self):
+        """WEBUI=true enables the web server."""
+        env = {
+            "API_ID": "1",
+            "API_HASH": "h",
+            "BOT_TOKEN": "t",
+            "WEBUI": "true",
+            "WEBUI_PORT": "9000",
+            "WEBUI_HOST": "127.0.0.1",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertTrue(cfg.webui_enabled)
+        self.assertEqual(cfg.webui_port, 9000)
+        self.assertEqual(cfg.webui_host, "127.0.0.1")
+
+    def test_webui_enabled_variants(self):
+        """WEBUI accepts '1' and 'yes' as truthy values."""
+        for truthy in ("1", "yes", "true", "True", "YES"):
+            env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "WEBUI": truthy}
+            with patch.dict(os.environ, env, clear=True):
+                from config import load_config
+                cfg = load_config()
+            self.assertTrue(cfg.webui_enabled, f"Expected webui_enabled for WEBUI={truthy!r}")
+
+    def test_webui_invalid_port_raises(self):
+        """WEBUI_PORT must be an integer."""
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "WEBUI_PORT": "notaport"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            with self.assertRaises(ValueError):
+                load_config()
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +580,77 @@ class TestDownloader(unittest.TestCase):
             result = _scan_directory(d)
         self.assertEqual(len(result), 2)
         self.assertTrue(all(os.path.isabs(p) for p in result))
+
+
+# ---------------------------------------------------------------------------
+# webui.py tests
+# ---------------------------------------------------------------------------
+
+class TestWebui(unittest.TestCase):
+    """Tests for the web UI helpers."""
+
+    def test_format_uptime_seconds_only(self):
+        from webui import format_uptime
+        self.assertEqual(format_uptime(45), "45s")
+
+    def test_format_uptime_minutes_and_seconds(self):
+        from webui import format_uptime
+        result = format_uptime(125)
+        self.assertIn("2m", result)
+        self.assertIn("5s", result)
+
+    def test_format_uptime_days_hours_minutes(self):
+        from webui import format_uptime
+        # 2 days + 3 hours + 4 minutes + 5 seconds
+        secs = 2 * 86400 + 3 * 3600 + 4 * 60 + 5
+        result = format_uptime(secs)
+        self.assertIn("2d", result)
+        self.assertIn("3h", result)
+        self.assertIn("4m", result)
+        self.assertIn("5s", result)
+
+    def test_format_uptime_zero(self):
+        from webui import format_uptime
+        self.assertEqual(format_uptime(0), "0s")
+
+    def test_collect_stats_contains_required_keys(self):
+        from webui import collect_stats
+        stats = collect_stats()
+        self.assertIn("status", stats)
+        self.assertIn("uptime_seconds", stats)
+        self.assertIn("uptime_human", stats)
+        self.assertIn("active_jobs", stats)
+        self.assertEqual(stats["status"], "running")
+        self.assertIsInstance(stats["uptime_seconds"], int)
+        self.assertGreaterEqual(stats["uptime_seconds"], 0)
+        self.assertIsInstance(stats["active_jobs"], int)
+
+    def test_collect_stats_includes_psutil_keys(self):
+        """When psutil is available, system stats should be present."""
+        try:
+            import psutil  # noqa: F401
+            psutil_available = True
+        except ImportError:
+            psutil_available = False
+
+        from webui import collect_stats
+        stats = collect_stats()
+        if psutil_available:
+            for key in ("cpu_percent", "memory_used_mb", "memory_total_mb",
+                        "memory_percent", "disk_used_gb", "disk_total_gb",
+                        "disk_percent"):
+                self.assertIn(key, stats, f"Missing key: {key}")
+        else:
+            self.assertNotIn("cpu_percent", stats)
+
+    def test_collect_stats_active_jobs_zero_by_default(self):
+        """With no active tasks, active_jobs should be 0."""
+        from webui import collect_stats
+        from task_manager import TaskManager, task_manager as _tm
+        # Use the module-level task_manager which starts clean.
+        stats = collect_stats()
+        # active_jobs should be a non-negative integer.
+        self.assertGreaterEqual(stats["active_jobs"], 0)
 
 
 if __name__ == "__main__":

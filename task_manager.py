@@ -85,6 +85,21 @@ class TaskManager:
             if not job_list:
                 self._user_jobs.pop(ut.user_id, None)
 
+    def count_active_jobs(self) -> int:
+        """Return the total number of currently running jobs across all users."""
+        count = 0
+        for jid_list in list(self._user_jobs.values()):
+            for jid in jid_list:
+                ut = self._tasks.get(jid)
+                if (
+                    ut is not None
+                    and not ut.cancel_flag
+                    and ut.task is not None
+                    and not ut.task.done()
+                ):
+                    count += 1
+        return count
+
     def is_active(self, user_id: int) -> bool:
         """Return ``True`` if *user_id* has at least one active job."""
         return len(self.get_user_tasks(user_id)) > 0

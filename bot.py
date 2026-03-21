@@ -26,6 +26,7 @@ from downloader import URL_RE, TARGET_RE, run_gallery_dl
 from task_manager import UserTask, task_manager
 from uploader import upload_files
 from utils import cleanup_directory, safe_edit_message
+from webui import collect_stats, format_uptime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +72,7 @@ START_TEXT = (
     "Commands:\n"
     "• /start — Show this message\n"
     "• /help  — Show usage instructions\n"
+    "• /stats — Show server and bot statistics\n"
     "• /cancel — Cancel **all** your active downloads/uploads\n"
     "• /cancel `<job_id>` — Cancel a specific job (ID shown in the status message)\n\n"
     "_⚠️ This bot was created by AI. Use at your own risk._"
@@ -88,11 +90,14 @@ HELP_TEXT = (
     "Append `-> @channel` or `-> -100xxxxxxxxxx` after the URL to forward files "
     "to a specific channel or group instead of this chat.\n"
     "Example: `https://example.com/post -> @myarchivechannel`\n\n"
+    "⚠️ **The bot must be added as an admin to the target channel/group first,**\n"
+    "otherwise the upload will fail with a permissions error.\n\n"
     "**Limits**\n"
     "• Albums are split into chunks of 10 (Telegram limit).\n"
     "• Maximum upload size is ~2 GB per file (MTProto).\n"
     "• Only URLs listed in `gallery-dl`'s supported sites work.\n\n"
     "**Commands**\n"
+    "• /stats — Show CPU, memory, disk and active job count.\n"
     "• /cancel — Stop **all** active downloads/uploads.\n"
     "• /cancel `<job_id>` — Stop a specific job.\n\n"
     "_⚠️ This bot was created by AI. Review the source before trusting it._"
@@ -109,6 +114,42 @@ async def start_handler(event) -> None:
 async def help_handler(event) -> None:
     """Handle the /help command."""
     await event.respond(HELP_TEXT)
+
+
+# ---------------------------------------------------------------------------
+# /stats handler
+# ---------------------------------------------------------------------------
+
+@require_allowed
+async def stats_handler(event) -> None:
+    """Handle the /stats command — show server and bot statistics."""
+    stats = collect_stats()
+    lines = [
+        "📊 **Server Stats**\n",
+        f"⏱ **Uptime:** {stats['uptime_human']}",
+        f"⚡ **Active jobs:** {stats['active_jobs']}",
+    ]
+
+    if "cpu_percent" in stats:
+        lines += [
+            "",
+            "🖥 **System**",
+            f"• CPU: {stats['cpu_percent']:.1f}%",
+            (
+                f"• RAM: {stats['memory_used_mb']} MB"
+                f" / {stats['memory_total_mb']} MB"
+                f" ({stats['memory_percent']:.1f}%)"
+            ),
+            (
+                f"• Disk: {stats['disk_used_gb']} GB"
+                f" / {stats['disk_total_gb']} GB"
+                f" ({stats['disk_percent']:.1f}%)"
+            ),
+        ]
+    else:
+        lines.append("\n_Install psutil for system resource stats._")
+
+    await event.respond("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -352,14 +393,15 @@ async def _pipeline(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Start the bot."""
+    """Start the bot (and the optional Web UI)."""
     global cfg, client
 
     cfg = load_config()
     logger.info(
-        "Loaded config. allowed_users=%s gallery_dl_config=%s",
+        "Loaded config. allowed_users=%s gallery_dl_config=%s webui=%s",
         cfg.allowed_users or "all",
         cfg.gallery_dl_config_path,
+        cfg.webui_enabled,
     )
 
     client = TelegramClient("bot_session", cfg.api_id, cfg.api_hash)
@@ -372,6 +414,9 @@ def main() -> None:
         help_handler, events.NewMessage(pattern=r"^/help(\s.*)?$")
     )
     client.add_event_handler(
+        stats_handler, events.NewMessage(pattern=r"^/stats(\s.*)?$")
+    )
+    client.add_event_handler(
         cancel_handler, events.NewMessage(pattern=r"^/cancel(\s.*)?$")
     )
     # URL handler: any message that is NOT a command.
@@ -380,10 +425,17 @@ def main() -> None:
         events.NewMessage(pattern=r"^(?!/).*https?://.*$"),
     )
 
+    async def _run() -> None:
+        await client.start(bot_token=cfg.bot_token)
+        if cfg.webui_enabled:
+            from webui import start_webui
+            await start_webui(cfg.webui_host, cfg.webui_port)
+        logger.info("Bot is running…")
+        await client.run_until_disconnected()
+
     logger.info("Starting bot…")
     try:
-        client.start(bot_token=cfg.bot_token)
-        client.run_until_disconnected()
+        asyncio.run(_run())
     finally:
         cfg.cleanup()
 

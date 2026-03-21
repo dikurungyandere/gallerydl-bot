@@ -27,6 +27,11 @@ class Config:
     allowed_users: Set[int]
     gallery_dl_config_path: Optional[str]
 
+    # Web UI settings.
+    webui_enabled: bool = False
+    webui_host: str = "0.0.0.0"
+    webui_port: int = 8080
+
     # Path to a temporary file written from GALLERY_DL_CONFIG_B64 or
     # GALLERY_DL_CONFIG_JSON, if used.
     _temp_config_file: Optional[str] = field(default=None, repr=False)
@@ -125,12 +130,26 @@ def load_config() -> Config:
             temp_config_file = _write_temp_config(parsed)
             gallery_dl_config_path = temp_config_file
 
+    # Web UI settings.
+    webui_enabled = os.getenv("WEBUI", "false").strip().lower() in ("true", "1", "yes")
+    webui_host = os.getenv("WEBUI_HOST", "0.0.0.0").strip()
+    raw_webui_port = os.getenv("WEBUI_PORT", "8080").strip()
+    try:
+        webui_port = int(raw_webui_port)
+    except ValueError:
+        raise ValueError(
+            f"WEBUI_PORT must be an integer, got: {raw_webui_port!r}"
+        )
+
     cfg = Config(
         api_id=api_id,
         api_hash=api_hash,
         bot_token=bot_token,
         allowed_users=allowed_users,
         gallery_dl_config_path=gallery_dl_config_path,
+        webui_enabled=webui_enabled,
+        webui_host=webui_host,
+        webui_port=webui_port,
     )
     cfg._temp_config_file = temp_config_file
     return cfg
