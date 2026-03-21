@@ -11,8 +11,10 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
-- 🔄 **Sequential upload** — all files are downloaded first, then uploaded to Telegram one-by-one
-- 📡 **Custom forwarding target** — append `-> @channel` or `-> -100xxx` to send files to a specific chat
+- 🎛️ **Configuration menu** — after sending a URL an inline-keyboard menu lets you choose destination and upload mode before the download begins
+- 📡 **Custom destination** — send files to a different channel or group by picking "Custom chat" in the menu
+- 🔄 **Default mode** — all files are downloaded first, then uploaded to Telegram one-by-one
+- 🚀 **Duplex mode** — each file is uploaded as soon as it finishes downloading, overlapping with the remaining downloads
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
 - ✂️ **Automatic file splitting** — files larger than ~1950 MB are split into numbered parts (`.001`, `.002`, …) so they can be uploaded and manually reassembled: `cat file.mp4.001 file.mp4.002 > file.mp4`
 - 🎬 **Streamable video** — video files are sent as Telegram videos (not documents) with `supports_streaming=True`, so they play directly in the app without downloading
@@ -33,7 +35,7 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 4. [Setup — Docker (recommended)](#setup--docker-recommended)
 5. [Configuration reference](#configuration-reference)
 6. [Commands](#commands)
-7. [Forwarding to a channel or group](#forwarding-to-a-channel-or-group)
+7. [Configuration menu](#configuration-menu)
 8. [Web UI for PaaS deployment](#web-ui-for-paas-deployment)
 9. [Project structure](#project-structure)
 10. [Security notes](#security-notes)
@@ -186,12 +188,20 @@ Copy `.env.example` to `.env` and fill in the values.
 
 ### Downloading
 
-Send any supported URL as a plain message to start a download. The bot will
-reply with a status message that updates as the download and upload progress.
+Send any supported URL as a plain message. The bot replies with a
+**configuration menu** (inline keyboard) where you set your options before the
+download starts:
 
-All files in a gallery are downloaded first, then uploaded to Telegram
-one-by-one. Multiple URLs can be sent at once — each starts an independent
-parallel job.
+| Row | Left button | Right button |
+|-----|-------------|--------------|
+| 1 | **Current chat** ✓ (default) | **Custom chat** |
+| 2 | **Default** mode ✓ (default) | **Duplex** mode |
+| 3 | **▶ Run** | **✖ Cancel** |
+
+Press **▶ Run** to start the job, or **✖ Cancel** to discard it.
+
+Multiple URLs can be sent at once — each gets its own menu and runs as an
+independent parallel job.
 
 ### Large files (> ~1950 MB)
 
@@ -220,29 +230,39 @@ front of the file (MP4 "faststart" encoding).
 
 ---
 
-## Forwarding to a channel or group
+## Configuration menu
 
-By default, files are sent back to the same chat where you sent the URL.
-To redirect them to a **channel or group** instead, append `-> @target`
-after the URL:
+After sending a URL the bot presents an inline-keyboard menu so you can
+configure the job before it starts.
 
-```
-https://example.com/gallery -> @myarchivechannel
-https://example.com/gallery -> -100123456789
-```
+### Destination (row 1)
 
-### ⚠️ Before forwarding works, you must add the bot to the channel/group
+| Button | Behaviour |
+|--------|-----------|
+| **Current chat** ✓ | Files are uploaded to the same chat where you sent the URL (default). |
+| **Custom chat** | Prompts you to **reply** to the menu message with a `@username` or numeric ID (e.g. `-100123456789`). Your reply is deleted automatically to keep the chat clean. Press **✖ Cancel** in the prompt to go back without changing the destination. |
 
-The bot can only send messages to chats it is a member of with posting
-permissions. Follow these steps:
+> **Before forwarding to a channel or group works**, the bot must be an admin
+> with posting permissions:
+>
+> 1. Open your channel or group in Telegram.
+> 2. Go to **Administrators** → **Add Administrator**.
+> 3. Search for your bot's `@username` and add it.
+> 4. Grant at least **"Post Messages"** (channels) or **"Send Messages"** (groups).
 
-1. Open your channel or group in Telegram.
-2. Go to **Administrators** → **Add Administrator**.
-3. Search for your bot's `@username` and add it.
-4. Grant at least the **"Post Messages"** permission (for channels) or
-   **"Send Messages"** permission (for groups).
+### Upload mode (row 2)
 
-Once the bot is an admin, forwarding will work.
+| Button | Behaviour |
+|--------|-----------|
+| **Default** ✓ | gallery-dl downloads **all** files first; once the download is complete the files are uploaded to Telegram one-by-one. |
+| **Duplex** | Each file is uploaded to Telegram **as soon as it finishes downloading**, without waiting for the rest of the gallery. Downloads and uploads run simultaneously. Useful for large galleries where you want the first files quickly. |
+
+### Run / Cancel (row 3)
+
+| Button | Behaviour |
+|--------|-----------|
+| **▶ Run** | Starts the download and upload pipeline with the current settings. |
+| **✖ Cancel** | Discards the pending job without downloading anything. |
 
 ---
 
