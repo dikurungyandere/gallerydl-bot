@@ -25,6 +25,7 @@ Usage:
 
 import asyncio
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Union
@@ -42,7 +43,7 @@ from config import Config, load_config
 from downloader import URL_RE, run_gallery_dl
 from task_manager import UserTask, task_manager
 from uploader import upload_files
-from utils import cleanup_directory, safe_edit_message
+from utils import cleanup_directory, format_size, format_status_message, safe_edit_message
 from webui import collect_stats, format_uptime
 
 logging.basicConfig(
@@ -537,7 +538,9 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         ut.temp_dir = temp_dir
 
         # Repurpose the menu message as the status message.
-        await msg.edit(f"⏳ Starting download… (job #{job_id})")
+        await msg.edit(
+            format_status_message(pj.url, job_id, pj.mode, "⏳ Starting download…")
+        )
         ut.status_message = msg
 
         task = asyncio.create_task(
@@ -611,7 +614,12 @@ async def _pipeline(
                 await file_queue.put(path)
                 await safe_edit_message(
                     status_message,
-                    f"📥 Downloading… {n_downloaded} file(s) · uploading… (job #{job_id})",
+                    format_status_message(
+                        url,
+                        job_id,
+                        mode,
+                        f"📥 Downloading… {n_downloaded} file(s) · uploading…",
+                    ),
                     last_edit,
                 )
 
@@ -632,6 +640,9 @@ async def _pipeline(
                             files=[item],
                             status_message=status_message,
                             show_completion=False,
+                            url=url,
+                            job_id=job_id,
+                            mode=mode,
                         )
                     finally:
                         file_queue.task_done()
@@ -677,15 +688,22 @@ async def _pipeline(
                     files=extra_files,
                     status_message=status_message,
                     show_completion=False,
+                    url=url,
+                    job_id=job_id,
+                    mode=mode,
                 )
 
             if not ut.cancel_flag:
-                await safe_edit_message(
-                    status_message,
-                    "✅ Upload Complete!",
-                    [0.0],
-                    force=True,
+                total_size = sum(
+                    os.path.getsize(f) for f in files if os.path.isfile(f)
                 )
+                summary = (
+                    f"✅ **Upload completed**\n\n"
+                    f"🔗 **Link:** `{url}`\n"
+                    f"**File count:** {len(files)}\n"
+                    f"**Total size:** {format_size(total_size)}"
+                )
+                await client.send_message(status_message.chat.id, summary)
 
         else:
             # ----------------------------------------------------------------
@@ -700,7 +718,12 @@ async def _pipeline(
                     return
                 await safe_edit_message(
                     status_message,
-                    f"📥 Downloading… {n_downloaded} file(s) so far (job #{job_id})",
+                    format_status_message(
+                        url,
+                        job_id,
+                        mode,
+                        f"📥 Downloading… {n_downloaded} file(s) so far",
+                    ),
                     last_edit,
                 )
 
@@ -729,7 +752,12 @@ async def _pipeline(
 
             await safe_edit_message(
                 status_message,
-                f"✅ Downloaded {len(files)} file(s). Uploading… (job #{job_id})",
+                format_status_message(
+                    url,
+                    job_id,
+                    mode,
+                    f"✅ Downloaded {len(files)} file(s). Uploading…",
+                ),
                 last_edit,
                 force=True,
             )
@@ -740,6 +768,9 @@ async def _pipeline(
                 files=files,
                 status_message=status_message,
                 show_completion=True,
+                url=url,
+                job_id=job_id,
+                mode=mode,
             )
 
     except asyncio.CancelledError:

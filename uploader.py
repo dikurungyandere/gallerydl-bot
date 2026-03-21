@@ -15,7 +15,13 @@ from typing import List, Optional
 from pyrogram.errors import PhotoInvalidDimensions
 
 from task_manager import UserTask
-from utils import format_progress_bar, format_size, format_speed, safe_edit_message
+from utils import (
+    format_progress_bar,
+    format_size,
+    format_speed,
+    format_status_message,
+    safe_edit_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +119,9 @@ async def upload_files(
     files: List[str],
     status_message: object,
     show_completion: bool = True,
+    url: str = "",
+    job_id: int = 0,
+    mode: str = "default",
 ) -> None:
     """Upload all *files* to *target_chat_id* one-by-one.
 
@@ -129,11 +138,14 @@ async def upload_files(
         ut:              The :class:`~task_manager.UserTask` for this job.
         files:           List of local file paths to upload.
         status_message:  The status :class:`Message` to update with progress.
-        show_completion: When ``True`` (default), edit the status message to
-                         "✅ Upload Complete!" after all files are sent.  Set
-                         to ``False`` when calling this function repeatedly
-                         (e.g. once per file in streaming mode) so the final
-                         message is only shown once.
+        show_completion: When ``True`` (default), send a new summary message
+                         after all files are sent.  Set to ``False`` when
+                         calling this function repeatedly (e.g. once per file
+                         in streaming mode) so the final message is only shown
+                         once.
+        url:             Source URL, embedded in the progress and summary messages.
+        job_id:          Unique job identifier, embedded in the progress messages.
+        mode:            ``"default"`` or ``"duplex"``, shown in progress messages.
 
     Raises:
         CancelUploadException: If the user requested cancellation mid-upload.
@@ -176,7 +188,12 @@ async def upload_files(
             size_info = f"{format_size(current)} / {format_size(total)}"
             speed_info = format_speed(speed)
             prefix = f"📤 Uploading {file_label}\n" if file_label else "📤 Uploading\n"
-            text = f"{prefix}{bar}\n{size_info} • {speed_info}"
+            progress_content = f"{prefix}{bar}\n{size_info} • {speed_info}"
+
+            if url and job_id:
+                text = format_status_message(url, job_id, mode, progress_content)
+            else:
+                text = progress_content
 
             await safe_edit_message(status_message, text, last_edit)
 
@@ -217,9 +234,16 @@ async def upload_files(
             raise asyncio.CancelledError("Upload cancelled by user.")
 
     if show_completion:
-        await safe_edit_message(
-            status_message,
-            "✅ Upload Complete!",
-            [0.0],
-            force=True,
+        total_size = sum(
+            os.path.getsize(f) for f in expanded_files if os.path.isfile(f)
+        )
+        summary = (
+            f"✅ **Upload completed**\n\n"
+            f"🔗 **Link:** `{url}`\n"
+            f"**File count:** {total_files}\n"
+            f"**Total size:** {format_size(total_size)}"
+        )
+        await client.send_message(  # type: ignore[attr-defined]
+            status_message.chat.id,  # type: ignore[attr-defined]
+            summary,
         )

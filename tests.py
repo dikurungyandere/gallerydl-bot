@@ -487,6 +487,41 @@ class TestUtils(unittest.TestCase):
         )
         mock_msg.edit.assert_called_once_with("forced")
 
+    def test_format_status_message_default_mode(self):
+        """format_status_message includes link, job ID, Default mode, progress, and cancel hint."""
+        from utils import format_status_message
+        result = format_status_message(
+            url="https://example.com/gallery",
+            job_id=42,
+            mode="default",
+            progress_content="📥 Downloading… 3 file(s) so far",
+        )
+        self.assertIn("https://example.com/gallery", result)
+        self.assertIn("42", result)
+        self.assertIn("Default", result)
+        self.assertNotIn("Duplex", result)
+        self.assertIn("📥 Downloading… 3 file(s) so far", result)
+        self.assertIn("/cancel 42", result)
+
+    def test_format_status_message_duplex_mode(self):
+        """format_status_message shows 'Duplex' for duplex mode."""
+        from utils import format_status_message
+        result = format_status_message(
+            url="https://example.com",
+            job_id=7,
+            mode="duplex",
+            progress_content="📥 Downloading…",
+        )
+        self.assertIn("Duplex", result)
+        self.assertNotIn("Default", result)
+
+    def test_format_status_message_contains_progress_header(self):
+        """format_status_message labels the progress section."""
+        from utils import format_status_message
+        result = format_status_message("https://x.com", 1, "default", "some progress")
+        self.assertIn("Progress", result)
+        self.assertIn("some progress", result)
+
 
 # ---------------------------------------------------------------------------
 # uploader.py tests
@@ -502,6 +537,7 @@ class TestUploader(unittest.TestCase):
 
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
 
         ut = UserTask(user_id=1)
@@ -529,6 +565,7 @@ class TestUploader(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
         mock_client.send_media_group = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
 
         ut = UserTask(user_id=1)
@@ -547,6 +584,83 @@ class TestUploader(unittest.TestCase):
 
         self.assertEqual(mock_client.send_photo.await_count, 2)
         mock_client.send_media_group.assert_not_called()
+
+    def test_upload_show_completion_sends_new_message(self):
+        """When show_completion=True, a new summary message is sent (not edit)."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=True,
+                    url="https://example.com",
+                    job_id=5,
+                    mode="default",
+                )
+            )
+        finally:
+            os.unlink(path)
+
+        # A new message should be sent with the summary.
+        mock_client.send_message.assert_awaited_once()
+        call_text = mock_client.send_message.call_args[0][1]
+        self.assertIn("Upload completed", call_text)
+        self.assertIn("https://example.com", call_text)
+        self.assertIn("File count", call_text)
+        self.assertIn("Total size", call_text)
+
+    def test_upload_show_completion_false_no_summary(self):
+        """When show_completion=False, no summary message is sent."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=False,
+                )
+            )
+        finally:
+            os.unlink(path)
+
+        mock_client.send_message.assert_not_awaited()
 
     # ------------------------------------------------------------------
     # split_large_file tests
@@ -998,6 +1112,7 @@ class TestDuplexPipeline(unittest.TestCase):
         # Patch the module-level client and cfg that _pipeline uses.
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
         mock_status.edit = AsyncMock()
 
@@ -1019,7 +1134,8 @@ class TestDuplexPipeline(unittest.TestCase):
             return files_on_disk
 
         async def fake_upload_files(client, target_chat_id, ut, files,
-                                    status_message, show_completion=True):
+                                    status_message, show_completion=True,
+                                    url="", job_id=0, mode="default"):
             pass  # No-op; we only verify it was called.
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1044,28 +1160,28 @@ class TestDuplexPipeline(unittest.TestCase):
                 bot_module.client = original_client
                 bot_module.cfg = original_cfg
 
-        return queued_paths, mock_status
+        return queued_paths, mock_client, mock_status
 
     def test_duplex_pipeline_queues_all_files(self):
         """In duplex mode all files reported by gallery-dl are queued."""
         files = ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.mp4"]
-        queued, _ = self._run_pipeline_duplex(files)
+        queued, _, _ = self._run_pipeline_duplex(files)
         self.assertEqual(queued, files)
 
     def test_duplex_pipeline_completion_message(self):
-        """Duplex mode edits the status message to '✅ Upload Complete!'."""
+        """Duplex mode sends a new summary message after all files are uploaded."""
         files = ["/tmp/x.jpg"]
-        _, mock_status = self._run_pipeline_duplex(files)
-        # The last edit call should contain "✅ Upload Complete!".
-        edit_calls = [str(c) for c in mock_status.edit.call_args_list]
+        _, mock_client, _ = self._run_pipeline_duplex(files)
+        # A new message should be sent (not just editing the status message).
+        send_calls = [str(c) for c in mock_client.send_message.call_args_list]
         self.assertTrue(
-            any("Upload Complete" in c for c in edit_calls),
-            f"Expected 'Upload Complete' in edit calls: {edit_calls}",
+            any("Upload completed" in c for c in send_calls),
+            f"Expected 'Upload completed' in send_message calls: {send_calls}",
         )
 
     def test_duplex_pipeline_no_files_shows_warning(self):
         """Duplex mode with no downloaded files shows the 'no files' warning."""
-        _, mock_status = self._run_pipeline_duplex([])
+        _, _, mock_status = self._run_pipeline_duplex([])
         edit_calls = [str(c) for c in mock_status.edit.call_args_list]
         self.assertTrue(
             any("No files" in c or "⚠️" in c for c in edit_calls),
