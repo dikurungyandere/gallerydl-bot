@@ -66,10 +66,10 @@ async def safe_edit_message(
     last_edit_time: list,
     force: bool = False,
 ) -> None:
-    """Edit a Telegram message, throttled to avoid FloodWaitError.
+    """Edit a Telegram message, throttled to avoid FloodWait.
 
     Args:
-        message:        A Telethon ``Message`` object with an ``.edit()`` method.
+        message:        A Pyrogram ``Message`` object with an ``.edit()`` method.
         text:           New message text.
         last_edit_time: A single-element list holding the Unix timestamp of the last
                         edit. Pass ``[0.0]`` initially; this list is mutated in place.
@@ -82,11 +82,12 @@ async def safe_edit_message(
         await message.edit(text)  # type: ignore[attr-defined]
         last_edit_time[0] = time.monotonic()
     except Exception as exc:
-        # Check for FloodWait from Telethon.
+        # Check for FloodWait (Pyrogram) by class name to keep this module
+        # library-agnostic. Pyrogram exposes the wait time via `.value`.
         exc_name = type(exc).__name__
         if "FloodWait" in exc_name:
-            seconds: int = getattr(exc, "seconds", 5)
-            logger.warning("FloodWaitError: sleeping %s seconds.", seconds)
+            seconds: int = getattr(exc, "value", getattr(exc, "seconds", 5))
+            logger.warning("FloodWait: sleeping %s seconds.", seconds)
             await asyncio.sleep(seconds)
         else:
             logger.warning("Failed to edit message: %s", exc)

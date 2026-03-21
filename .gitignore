@@ -1,7 +1,7 @@
 # Credentials — never commit the real .env file!
 .env
 
-# Telethon session files
+# Telegram session files (Pyrogram)
 *.session
 *.session-journal
 

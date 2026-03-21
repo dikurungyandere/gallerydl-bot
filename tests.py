@@ -526,7 +526,7 @@ class TestUploader(unittest.TestCase):
         from task_manager import UserTask
 
         mock_client = MagicMock()
-        mock_client.send_file = AsyncMock()
+        mock_client.send_photo = AsyncMock()
         mock_status = AsyncMock()
 
         ut = UserTask(user_id=1)
@@ -542,8 +542,8 @@ class TestUploader(unittest.TestCase):
             )
         )
 
-        mock_client.send_file.assert_called_once()
-        call_args = mock_client.send_file.call_args
+        mock_client.send_photo.assert_called_once()
+        call_args = mock_client.send_photo.call_args
         self.assertEqual(call_args[0][0], target)
 
     # ------------------------------------------------------------------

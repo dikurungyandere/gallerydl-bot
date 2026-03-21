@@ -1,6 +1,6 @@
 """
 gallerydl-bot: A Telegram bot that downloads media via gallery-dl and uploads
-it back to the user using Telethon (MTProto).
+it back to the user using Pyrogram (MTProto).
 
 Files are uploaded as soon as each one is downloaded (streaming pipeline).
 Files larger than ~1950 MB are automatically split into numbered parts so they
@@ -23,8 +23,9 @@ import tempfile
 import time
 from typing import Optional, Union
 
-from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError
+from pyrogram import Client, filters, idle
+from pyrogram.errors import FloodWait
+from pyrogram.handlers import MessageHandler
 
 from config import Config, load_config
 from downloader import URL_RE, TARGET_RE, run_gallery_dl
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Module-level config (populated in main()).
 # ---------------------------------------------------------------------------
 cfg: Optional[Config] = None
-client: Optional[TelegramClient] = None
+client: Optional[Client] = None
 
 # ---------------------------------------------------------------------------
 # Authentication decorator
@@ -51,13 +52,13 @@ client: Optional[TelegramClient] = None
 
 def require_allowed(func):
     """Silently ignore messages from users not in ALLOWED_USERS."""
-    async def wrapper(event):
+    async def wrapper(client, message):
         if cfg and cfg.allowed_users:
-            sender_id = event.sender_id
+            sender_id = message.from_user.id
             if sender_id not in cfg.allowed_users:
                 logger.debug("Ignoring message from unauthorized user %s.", sender_id)
                 return
-        return await func(event)
+        return await func(client, message)
     return wrapper
 
 
@@ -112,15 +113,15 @@ HELP_TEXT = (
 
 
 @require_allowed
-async def start_handler(event) -> None:
+async def start_handler(client, message) -> None:
     """Handle the /start command."""
-    await event.respond(START_TEXT)
+    await message.reply(START_TEXT)
 
 
 @require_allowed
-async def help_handler(event) -> None:
+async def help_handler(client, message) -> None:
     """Handle the /help command."""
-    await event.respond(HELP_TEXT)
+    await message.reply(HELP_TEXT)
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ async def help_handler(event) -> None:
 # ---------------------------------------------------------------------------
 
 @require_allowed
-async def stats_handler(event) -> None:
+async def stats_handler(client, message) -> None:
     """Handle the /stats command — show server and bot statistics."""
     stats = collect_stats()
     lines = [
@@ -156,7 +157,7 @@ async def stats_handler(event) -> None:
     else:
         lines.append("\n_Install psutil for system resource stats._")
 
-    await event.respond("\n".join(lines))
+    await message.reply("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -164,14 +165,14 @@ async def stats_handler(event) -> None:
 # ---------------------------------------------------------------------------
 
 @require_allowed
-async def cancel_handler(event) -> None:
+async def cancel_handler(client, message) -> None:
     """Handle the /cancel [job_id] command.
 
     With no argument: cancel all active jobs for this user.
     With a numeric job_id: cancel only that specific job.
     """
-    user_id: int = event.sender_id
-    text: str = event.raw_text or ""
+    user_id: int = message.from_user.id
+    text: str = message.text or ""
 
     # Check for an optional numeric job_id argument.
     parts = text.strip().split(None, 1)
@@ -180,7 +181,7 @@ async def cancel_handler(event) -> None:
         try:
             job_id_arg = int(parts[1])
         except ValueError:
-            await event.respond(
+            await message.reply(
                 "⚠️ Invalid job ID. Use /cancel to stop all jobs, "
                 "or /cancel <job_id> for a specific one."
             )
@@ -189,14 +190,14 @@ async def cancel_handler(event) -> None:
     active_jobs = task_manager.get_user_tasks(user_id)
 
     if not active_jobs:
-        await event.respond("ℹ️ You have no active downloads or uploads to cancel.")
+        await message.reply("ℹ️ You have no active downloads or uploads to cancel.")
         return
 
     if job_id_arg is not None:
         # Cancel a specific job.
         ut = task_manager.get(job_id_arg)
         if ut is None or ut.user_id != user_id:
-            await event.respond(f"ℹ️ No active job #{job_id_arg} found.")
+            await message.reply(f"ℹ️ No active job #{job_id_arg} found.")
             return
 
         status_msg = ut.status_message
@@ -208,9 +209,9 @@ async def cancel_handler(event) -> None:
                 except Exception:
                     pass
             else:
-                await event.respond(f"❌ Job #{job_id_arg} cancelled by user.")
+                await message.reply(f"❌ Job #{job_id_arg} cancelled by user.")
         else:
-            await event.respond(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
+            await message.reply(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
     else:
         # Cancel all jobs for this user.
         # Edit each status message before cancelling so the user sees which
@@ -224,9 +225,9 @@ async def cancel_handler(event) -> None:
 
         count = await task_manager.cancel_all(user_id)
         if count:
-            await event.respond(f"❌ Cancelled {count} active job(s).")
+            await message.reply(f"❌ Cancelled {count} active job(s).")
         else:
-            await event.respond("ℹ️ Nothing to cancel.")
+            await message.reply("ℹ️ Nothing to cancel.")
 
 
 # ---------------------------------------------------------------------------
@@ -234,15 +235,15 @@ async def cancel_handler(event) -> None:
 # ---------------------------------------------------------------------------
 
 @require_allowed
-async def url_handler(event) -> None:
+async def url_handler(client, message) -> None:
     """Handle incoming messages that contain a URL.
 
     Supports an optional forwarding target after the URL:
         https://example.com/gallery -> @mychannel
         https://example.com/gallery -> -100123456789
     """
-    user_id: int = event.sender_id
-    text: str = event.raw_text or ""
+    user_id: int = message.from_user.id
+    text: str = message.text or ""
 
     # Strip the optional "-> target" suffix before URL matching.
     target_str: Optional[str] = None
@@ -261,11 +262,11 @@ async def url_handler(event) -> None:
     # Resolve the target chat: numeric ID or username.
     target_chat_id: Union[int, str, None]
     if target_str is None:
-        target_chat_id = event.chat_id  # type: ignore[attr-defined]
+        target_chat_id = message.chat.id
     elif target_str.lstrip("-").isdigit():
         target_chat_id = int(target_str)
     else:
-        target_chat_id = target_str  # Telethon accepts "@username" strings
+        target_chat_id = target_str  # Pyrogram accepts "@username" strings
 
     # Create a new job slot — no limit on concurrent jobs.
     job_id, ut = task_manager.create(user_id)
@@ -276,7 +277,7 @@ async def url_handler(event) -> None:
     ut.temp_dir = temp_dir
 
     # Send initial status message (includes the job ID for reference).
-    status_message = await event.respond(f"⏳ Starting download… (job #{job_id})")
+    status_message = await message.reply(f"⏳ Starting download… (job #{job_id})")
     ut.status_message = status_message
 
     # Wrap the pipeline in a task so we can cancel it.
@@ -407,9 +408,9 @@ async def _pipeline(
         except Exception:
             pass
 
-    except FloodWaitError as exc:
-        wait = exc.seconds
-        logger.warning("FloodWaitError for job #%s. Waiting %s s.", job_id, wait)
+    except FloodWait as exc:
+        wait = exc.value
+        logger.warning("FloodWait for job #%s. Waiting %s s.", job_id, wait)
         try:
             await status_message.edit(
                 f"⚠️ Telegram rate limit hit. Please wait {wait} seconds and try again."
@@ -457,34 +458,36 @@ def main() -> None:
         cfg.webui_enabled,
     )
 
-    client = TelegramClient("bot_session", cfg.api_id, cfg.api_hash)
+    client = Client(
+        "bot_session",
+        api_id=cfg.api_id,
+        api_hash=cfg.api_hash,
+        bot_token=cfg.bot_token,
+    )
 
     # Register handlers.
-    client.add_event_handler(
-        start_handler, events.NewMessage(pattern=r"^/start(\s.*)?$")
-    )
-    client.add_event_handler(
-        help_handler, events.NewMessage(pattern=r"^/help(\s.*)?$")
-    )
-    client.add_event_handler(
-        stats_handler, events.NewMessage(pattern=r"^/stats(\s.*)?$")
-    )
-    client.add_event_handler(
-        cancel_handler, events.NewMessage(pattern=r"^/cancel(\s.*)?$")
-    )
-    # URL handler: any message that is NOT a command.
-    client.add_event_handler(
-        url_handler,
-        events.NewMessage(pattern=r"^(?!/).*https?://.*$"),
+    client.add_handler(MessageHandler(start_handler, filters.command("start")))
+    client.add_handler(MessageHandler(help_handler, filters.command("help")))
+    client.add_handler(MessageHandler(stats_handler, filters.command("stats")))
+    client.add_handler(MessageHandler(cancel_handler, filters.command("cancel")))
+    # URL handler: text messages containing a URL that are not bot commands.
+    client.add_handler(
+        MessageHandler(
+            url_handler,
+            filters.text
+            & filters.regex(r"https?://")
+            & ~filters.command(["start", "help", "stats", "cancel"]),
+        )
     )
 
     async def _run() -> None:
-        await client.start(bot_token=cfg.bot_token)
+        await client.start()
         if cfg.webui_enabled:
             from webui import start_webui
             await start_webui(cfg.webui_host, cfg.webui_port)
         logger.info("Bot is running…")
-        await client.run_until_disconnected()
+        await idle()
+        await client.stop()
 
     logger.info("Starting bot…")
     try:

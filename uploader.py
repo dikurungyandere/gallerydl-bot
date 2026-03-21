@@ -12,6 +12,8 @@ import os
 import time
 from typing import List, Optional
 
+from pyrogram.types import InputMediaDocument, InputMediaPhoto, InputMediaVideo
+
 from task_manager import UserTask
 from utils import format_progress_bar, format_size, format_speed, safe_edit_message, EDIT_THROTTLE_SECONDS
 
@@ -25,7 +27,7 @@ TELEGRAM_MAX_FILE_SIZE = 1950 * 1024 * 1024  # 1950 MB in bytes
 
 
 class CancelUploadException(Exception):
-    """Raised inside a Telethon progress callback to abort an upload."""
+    """Raised inside a Pyrogram progress callback to abort an upload."""
 
 
 def split_large_file(path: str, max_size: int = TELEGRAM_MAX_FILE_SIZE) -> List[str]:
@@ -120,6 +122,24 @@ def chunk_files(files: List[str], size: int = ALBUM_CHUNK_SIZE) -> List[List[str
     return [files[i : i + size] for i in range(0, len(files), size)]
 
 
+def _make_input_media(path: str):
+    """Build the appropriate :class:`~pyrogram.types.InputMedia` object for *path*.
+
+    Videos become :class:`InputMediaVideo` (with streaming enabled), images
+    become :class:`InputMediaPhoto`, and everything else becomes
+    :class:`InputMediaDocument`.
+
+    Args:
+        path: Absolute (or relative) path to the file.
+    """
+    caption = _file_caption(path) or ""
+    if _is_video(path):
+        return InputMediaVideo(path, caption=caption, supports_streaming=True)
+    if _is_image(path):
+        return InputMediaPhoto(path, caption=caption)
+    return InputMediaDocument(path)
+
+
 async def upload_files(
     client: object,
     target_chat_id: object,
@@ -137,10 +157,9 @@ async def upload_files(
     app without downloading.
 
     Args:
-        client:          Telethon ``TelegramClient`` instance.
+        client:          Pyrogram ``Client`` instance.
         target_chat_id:  The Telegram chat/channel/group to send files to.
-                         Can be an integer ID, a ``@username`` string, or any
-                         entity accepted by Telethon's ``send_file``.
+                         Can be an integer ID or a ``@username`` string.
         ut:              The :class:`~task_manager.UserTask` for this job.
         files:           List of local file paths to upload.
         status_message:  The status :class:`Message` to update with progress.
@@ -177,7 +196,7 @@ async def upload_files(
         single_file = len(chunk) == 1
 
         async def _progress_callback(current: int, total: int) -> None:
-            """Telethon-compatible upload progress callback."""
+            """Pyrogram-compatible upload progress callback."""
             if ut.cancel_flag:
                 raise CancelUploadException("Upload cancelled mid-transfer.")
 
@@ -201,36 +220,42 @@ async def upload_files(
         try:
             if single_file:
                 file_path = chunk[0]
-                # For video files set supports_streaming so they play inline.
-                extra_kwargs: dict = {}
+                caption = _file_caption(file_path) or ""
                 if _is_video(file_path):
-                    from telethon.tl.types import DocumentAttributeVideo  # type: ignore[import]
-                    extra_kwargs["attributes"] = [
-                        DocumentAttributeVideo(
-                            duration=0,
-                            w=0,
-                            h=0,
-                            supports_streaming=True,
-                        )
-                    ]
-                caption = _file_caption(file_path)
-                if caption is not None:
-                    extra_kwargs["caption"] = caption
-                await client.send_file(  # type: ignore[attr-defined]
-                    target_chat_id,
-                    file_path,
-                    progress_callback=_progress_callback,
-                    **extra_kwargs,
-                )
+                    await client.send_video(  # type: ignore[attr-defined]
+                        target_chat_id,
+                        file_path,
+                        caption=caption,
+                        supports_streaming=True,
+                        progress=_progress_callback,
+                    )
+                elif _is_image(file_path):
+                    await client.send_photo(  # type: ignore[attr-defined]
+                        target_chat_id,
+                        file_path,
+                        caption=caption,
+                        progress=_progress_callback,
+                    )
+                else:
+                    await client.send_document(  # type: ignore[attr-defined]
+                        target_chat_id,
+                        file_path,
+                        progress=_progress_callback,
+                    )
             else:
-                # For albums: Telethon accepts a list; progress is per-file.
-                # Pass per-file captions (filename) for images/videos; None for documents.
-                captions = [_file_caption(f) for f in chunk]
-                await client.send_file(  # type: ignore[attr-defined]
+                # For albums: send_media_group does not support a per-file
+                # progress callback, so we update the status message once
+                # before sending the batch.
+                await safe_edit_message(
+                    status_message,
+                    f"📤 Uploading {chunk_label or 'album'}…",
+                    last_edit,
+                    force=True,
+                )
+                media_list = [_make_input_media(f) for f in chunk]
+                await client.send_media_group(  # type: ignore[attr-defined]
                     target_chat_id,
-                    chunk,
-                    caption=captions,
-                    progress_callback=_progress_callback,
+                    media_list,
                 )
         except CancelUploadException:
             raise asyncio.CancelledError("Upload cancelled by user.")

@@ -2,7 +2,7 @@
 
 > **⚠️ AI-GENERATED CODE DISCLAIMER**: This entire codebase has been created by AI. Review it carefully before deploying to production.
 
-A Telegram bot that downloads media from any [gallery-dl](https://github.com/mikf/gallery-dl)-supported website and uploads the files back to you via Telegram, using [Telethon](https://github.com/LonamiWebs/Telethon) (MTProto — supports files up to 2 GB).
+A Telegram bot that downloads media from any [gallery-dl](https://github.com/mikf/gallery-dl)-supported website and uploads the files back to you via Telegram, using [Pyrogram](https://github.com/TelegramPlayGround/Pyrogram) (MTProto — supports files up to 2 GB).
 
 ---
 
@@ -103,9 +103,9 @@ cp .env.example .env
 python bot.py
 ```
 
-The first time you run the bot, Telethon may ask you to confirm the session
-interactively in the terminal. This only happens once; the session is saved
-to `bot_session.session`.
+The first time you run the bot, Pyrogram creates a session file
+(`bot_session.session`) that is reused on subsequent starts so the bot does
+not need to re-authenticate.
 
 ---
 
