@@ -180,7 +180,7 @@ async def _pipeline(
 
     try:
         # ----------------------------------------------------------------
-        # Phase 3: Download via gallery-dl
+        # Step 1: Download via gallery-dl
         # ----------------------------------------------------------------
         file_count_ref: list = [0]
 
@@ -217,7 +217,7 @@ async def _pipeline(
             return
 
         # ----------------------------------------------------------------
-        # Phase 4: Upload to Telegram
+        # Step 2: Upload to Telegram
         # ----------------------------------------------------------------
         await safe_edit_message(
             status_message,
@@ -268,7 +268,7 @@ async def _pipeline(
 
     finally:
         # ----------------------------------------------------------------
-        # Phase 5: Cleanup
+        # Step 3: Cleanup (always runs)
         # ----------------------------------------------------------------
         cleanup_directory(temp_dir)
         task_manager.remove(user_id)
