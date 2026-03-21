@@ -620,6 +620,54 @@ class TestUploader(unittest.TestCase):
         from uploader import _is_video
         self.assertFalse(_is_video("noextension"))
 
+    # ------------------------------------------------------------------
+    # _is_image tests
+    # ------------------------------------------------------------------
+
+    def test_is_image_jpg(self):
+        from uploader import _is_image
+        self.assertTrue(_is_image("photo.jpg"))
+
+    def test_is_image_png(self):
+        from uploader import _is_image
+        self.assertTrue(_is_image("image.png"))
+
+    def test_is_image_gif(self):
+        from uploader import _is_image
+        self.assertTrue(_is_image("anim.gif"))
+
+    def test_is_image_webp(self):
+        from uploader import _is_image
+        self.assertTrue(_is_image("sticker.webp"))
+
+    def test_is_image_mp4_is_false(self):
+        from uploader import _is_image
+        self.assertFalse(_is_image("clip.mp4"))
+
+    def test_is_image_no_extension_is_false(self):
+        from uploader import _is_image
+        self.assertFalse(_is_image("noextension"))
+
+    # ------------------------------------------------------------------
+    # _file_caption tests
+    # ------------------------------------------------------------------
+
+    def test_file_caption_image_returns_basename(self):
+        from uploader import _file_caption
+        self.assertEqual(_file_caption("/downloads/photo.jpg"), "photo.jpg")
+
+    def test_file_caption_video_returns_basename(self):
+        from uploader import _file_caption
+        self.assertEqual(_file_caption("/downloads/clip.mp4"), "clip.mp4")
+
+    def test_file_caption_document_returns_none(self):
+        from uploader import _file_caption
+        self.assertIsNone(_file_caption("/downloads/archive.zip"))
+
+    def test_file_caption_no_extension_returns_none(self):
+        from uploader import _file_caption
+        self.assertIsNone(_file_caption("/downloads/unknownfile"))
+
 
 # ---------------------------------------------------------------------------
 # downloader.py tests

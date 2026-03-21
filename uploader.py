@@ -77,6 +77,36 @@ def _is_video(path: str) -> bool:
     return mime is not None and mime.startswith("video/")
 
 
+def _is_image(path: str) -> bool:
+    """Return ``True`` when *path* appears to be an image file.
+
+    Detection is based on the file extension via :mod:`mimetypes`; no file I/O
+    is performed so the file does not need to exist on disk.
+    """
+    mime, _ = mimetypes.guess_type(path)
+    return mime is not None and mime.startswith("image/")
+
+
+def _file_caption(path: str) -> Optional[str]:
+    """Return the filename as a caption for images and videos; ``None`` otherwise.
+
+    Images and videos are sent as native Telegram media (rendered inline) and
+    benefit from having the original filename in the caption.  Generic files
+    (documents) already show their filename in the file header, so no separate
+    caption is needed.
+
+    Args:
+        path: Absolute (or relative) path to the file.
+
+    Returns:
+        ``os.path.basename(path)`` when the file is an image or video;
+        ``None`` for all other file types.
+    """
+    if _is_image(path) or _is_video(path):
+        return os.path.basename(path)
+    return None
+
+
 def chunk_files(files: List[str], size: int = ALBUM_CHUNK_SIZE) -> List[List[str]]:
     """Split *files* into sub-lists of at most *size* elements.
 
@@ -183,6 +213,9 @@ async def upload_files(
                             supports_streaming=True,
                         )
                     ]
+                caption = _file_caption(file_path)
+                if caption is not None:
+                    extra_kwargs["caption"] = caption
                 await client.send_file(  # type: ignore[attr-defined]
                     target_chat_id,
                     file_path,
@@ -191,9 +224,12 @@ async def upload_files(
                 )
             else:
                 # For albums: Telethon accepts a list; progress is per-file.
+                # Pass per-file captions (filename) for images/videos; None for documents.
+                captions = [_file_caption(f) for f in chunk]
                 await client.send_file(  # type: ignore[attr-defined]
                     target_chat_id,
                     chunk,
+                    caption=captions,
                     progress_callback=_progress_callback,
                 )
         except CancelUploadException:
