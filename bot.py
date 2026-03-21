@@ -458,29 +458,30 @@ def main() -> None:
         cfg.webui_enabled,
     )
 
-    client = Client(
-        "bot_session",
-        api_id=cfg.api_id,
-        api_hash=cfg.api_hash,
-        bot_token=cfg.bot_token,
-    )
-
-    # Register handlers.
-    client.add_handler(MessageHandler(start_handler, filters.command("start")))
-    client.add_handler(MessageHandler(help_handler, filters.command("help")))
-    client.add_handler(MessageHandler(stats_handler, filters.command("stats")))
-    client.add_handler(MessageHandler(cancel_handler, filters.command("cancel")))
-    # URL handler: text messages containing a URL that are not bot commands.
-    client.add_handler(
-        MessageHandler(
-            url_handler,
-            filters.text
-            & filters.regex(r"https?://")
-            & ~filters.command(["start", "help", "stats", "cancel"]),
-        )
-    )
-
     async def _run() -> None:
+        global client
+        client = Client(
+            "bot_session",
+            api_id=cfg.api_id,
+            api_hash=cfg.api_hash,
+            bot_token=cfg.bot_token,
+        )
+
+        # Register handlers (must be done after Client is created).
+        client.add_handler(MessageHandler(start_handler, filters.command("start")))
+        client.add_handler(MessageHandler(help_handler, filters.command("help")))
+        client.add_handler(MessageHandler(stats_handler, filters.command("stats")))
+        client.add_handler(MessageHandler(cancel_handler, filters.command("cancel")))
+        # URL handler: text messages containing a URL that are not bot commands.
+        client.add_handler(
+            MessageHandler(
+                url_handler,
+                filters.text
+                & filters.regex(r"https?://")
+                & ~filters.command(["start", "help", "stats", "cancel"]),
+            )
+        )
+
         await client.start()
         if cfg.webui_enabled:
             from webui import start_webui
