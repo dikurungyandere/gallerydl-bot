@@ -9,19 +9,14 @@ import asyncio
 import logging
 import os
 import re
-import tempfile
 from typing import Callable, Awaitable, List, Optional
 
 from task_manager import UserTask, task_manager
-from utils import safe_edit_message
 
 logger = logging.getLogger(__name__)
 
 # Regex to detect URLs in messages.
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-
-# Timeout in seconds before gallery-dl is forcibly killed (0 = no timeout).
-SUBPROCESS_TIMEOUT_SECONDS = 3600  # 1 hour
 
 
 def _build_gallery_dl_cmd(
@@ -52,6 +47,9 @@ async def run_gallery_dl(
 ) -> List[str]:
     """Run gallery-dl and collect downloaded file paths.
 
+    There is intentionally no timeout: large gallery downloads can take hours
+    or even days. Use /cancel to stop an in-progress download at any time.
+
     Args:
         user_id:     Telegram user ID (used to check cancel_flag and store process).
         url:         URL to download.
@@ -64,7 +62,7 @@ async def run_gallery_dl(
         Sorted list of absolute paths to downloaded files.
 
     Raises:
-        RuntimeError: If gallery-dl exits with a non-zero code or times out.
+        RuntimeError: If gallery-dl exits with a non-zero code.
         asyncio.CancelledError: If cancellation was requested.
     """
     cmd = _build_gallery_dl_cmd(url, temp_dir, config_path)
@@ -94,19 +92,10 @@ async def run_gallery_dl(
                 downloaded_files.append(line)
                 await on_progress(len(downloaded_files))
 
-    try:
-        # Read stdout concurrently with a timeout watchdog.
-        await asyncio.wait_for(_read_stdout(), timeout=SUBPROCESS_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        raise RuntimeError(
-            f"gallery-dl timed out after {SUBPROCESS_TIMEOUT_SECONDS} seconds."
-        )
+    # Read stdout with no timeout — let gallery-dl run as long as it needs.
+    await _read_stdout()
 
-    # Wait for the process to finish.
+    # Wait for the process to exit (it should be nearly instant after EOF).
     try:
         await asyncio.wait_for(process.wait(), timeout=30)
     except asyncio.TimeoutError:
@@ -138,7 +127,6 @@ async def run_gallery_dl(
     # Scan the directory for any files gallery-dl wrote there (stdout may have
     # reported relative paths or nothing at all on some extractors).
     disk_files = _scan_directory(temp_dir)
-    # Merge: prefer disk scan (always absolute) but keep order from stdout too.
     all_files = sorted(set(disk_files))
     return all_files
 
