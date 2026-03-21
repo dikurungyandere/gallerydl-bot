@@ -12,6 +12,7 @@ import os
 import time
 from typing import List, Optional
 
+from pyrogram.errors import PhotoInvalidDimensions
 from pyrogram.types import InputMediaDocument, InputMediaPhoto, InputMediaVideo
 
 from task_manager import UserTask
@@ -230,12 +231,22 @@ async def upload_files(
                         progress=_progress_callback,
                     )
                 elif _is_image(file_path):
-                    await client.send_photo(  # type: ignore[attr-defined]
-                        target_chat_id,
-                        file_path,
-                        caption=caption,
-                        progress=_progress_callback,
-                    )
+                    try:
+                        await client.send_photo(  # type: ignore[attr-defined]
+                            target_chat_id,
+                            file_path,
+                            caption=caption,
+                            progress=_progress_callback,
+                        )
+                    except PhotoInvalidDimensions:
+                        # Image dimensions rejected by Telegram (e.g. very tall
+                        # manga pages); send as a document instead.
+                        await client.send_document(  # type: ignore[attr-defined]
+                            target_chat_id,
+                            file_path,
+                            caption=caption,
+                            progress=_progress_callback,
+                        )
                 else:
                     await client.send_document(  # type: ignore[attr-defined]
                         target_chat_id,
@@ -253,10 +264,22 @@ async def upload_files(
                     force=True,
                 )
                 media_list = [_make_input_media(f) for f in chunk]
-                await client.send_media_group(  # type: ignore[attr-defined]
-                    target_chat_id,
-                    media_list,
-                )
+                try:
+                    await client.send_media_group(  # type: ignore[attr-defined]
+                        target_chat_id,
+                        media_list,
+                    )
+                except PhotoInvalidDimensions:
+                    # At least one photo in the album has invalid dimensions;
+                    # retry with all images sent as documents.
+                    media_list = [
+                        InputMediaDocument(f) if _is_image(f) else _make_input_media(f)
+                        for f in chunk
+                    ]
+                    await client.send_media_group(  # type: ignore[attr-defined]
+                        target_chat_id,
+                        media_list,
+                    )
         except CancelUploadException:
             raise asyncio.CancelledError("Upload cancelled by user.")
 

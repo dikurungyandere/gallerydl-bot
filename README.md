@@ -11,7 +11,7 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
-- 🔄 **Streaming pipeline** — each file is uploaded to Telegram as soon as it finishes downloading; no need to wait for an entire gallery to complete before the first file arrives
+- 🔄 **Batch upload** — all files are downloaded first, then uploaded to Telegram in one go
 - 📡 **Custom forwarding target** — append `-> @channel` or `-> -100xxx` to send files to a specific chat
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
 - 🔀 **Album support** — batch downloads are automatically chunked into albums of ≤ 10 files (Telegram's limit)
@@ -190,11 +190,9 @@ Copy `.env.example` to `.env` and fill in the values.
 Send any supported URL as a plain message to start a download. The bot will
 reply with a status message that updates as the download and upload progress.
 
-Each file is uploaded to Telegram **as soon as it finishes downloading** — you
-do not have to wait for an entire gallery to complete before the first file
-arrives in your chat.
-
-Multiple URLs can be sent at once — each starts an independent parallel job.
+All files in a gallery are downloaded first, then uploaded to Telegram in one
+batch.  Multiple URLs can be sent at once — each starts an independent
+parallel job.
 
 ### Large files (> ~1950 MB)
 
