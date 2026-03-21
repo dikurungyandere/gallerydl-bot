@@ -11,10 +11,9 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
-- 🔄 **Batch upload** — all files are downloaded first, then uploaded to Telegram in one go
+- 🔄 **Sequential upload** — all files are downloaded first, then uploaded to Telegram one-by-one
 - 📡 **Custom forwarding target** — append `-> @channel` or `-> -100xxx` to send files to a specific chat
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
-- 🔀 **Album support** — batch downloads are automatically chunked into albums of ≤ 10 files (Telegram's limit)
 - ✂️ **Automatic file splitting** — files larger than ~1950 MB are split into numbered parts (`.001`, `.002`, …) so they can be uploaded and manually reassembled: `cat file.mp4.001 file.mp4.002 > file.mp4`
 - 🎬 **Streamable video** — video files are sent as Telegram videos (not documents) with `supports_streaming=True`, so they play directly in the app without downloading
 - ❌ **Cancellation** — `/cancel` stops all jobs; `/cancel <job_id>` stops a specific one
@@ -190,8 +189,8 @@ Copy `.env.example` to `.env` and fill in the values.
 Send any supported URL as a plain message to start a download. The bot will
 reply with a status message that updates as the download and upload progress.
 
-All files in a gallery are downloaded first, then uploaded to Telegram in one
-batch.  Multiple URLs can be sent at once — each starts an independent
+All files in a gallery are downloaded first, then uploaded to Telegram
+one-by-one. Multiple URLs can be sent at once — each starts an independent
 parallel job.
 
 ### Large files (> ~1950 MB)
@@ -289,7 +288,7 @@ gallerydl-bot/
 ├── bot.py            # Entry point: event handlers and pipeline orchestration
 ├── config.py         # Configuration loading and validation
 ├── downloader.py     # gallery-dl subprocess wrapper
-├── uploader.py       # Telegram upload logic (progress, album chunking)
+├── uploader.py       # Telegram upload logic (progress, per-file sending)
 ├── task_manager.py   # Per-job task state and cancellation
 ├── utils.py          # Progress bar formatter, throttled message editing, cleanup
 ├── webui.py          # Optional aiohttp status page (/  and /health)

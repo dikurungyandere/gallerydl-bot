@@ -1,5 +1,5 @@
 """
-Telegram upload logic: single files, album batches, and progress callbacks.
+Telegram upload logic: per-file sends and progress callbacks.
 
 AI-GENERATED CODE DISCLAIMER: This entire codebase has been created by AI.
 Review it carefully before deploying to production.
@@ -13,15 +13,11 @@ import time
 from typing import List, Optional
 
 from pyrogram.errors import PhotoInvalidDimensions
-from pyrogram.types import InputMediaDocument, InputMediaPhoto, InputMediaVideo
 
 from task_manager import UserTask
-from utils import format_progress_bar, format_size, format_speed, safe_edit_message, EDIT_THROTTLE_SECONDS
+from utils import format_progress_bar, format_size, format_speed, safe_edit_message
 
 logger = logging.getLogger(__name__)
-
-# Telegram album limit (hard limit imposed by Telegram).
-ALBUM_CHUNK_SIZE = 10
 
 # Safe upload size limit: stay below Telegram's 2 GB MTProto ceiling.
 TELEGRAM_MAX_FILE_SIZE = 1950 * 1024 * 1024  # 1950 MB in bytes
@@ -110,37 +106,6 @@ def _file_caption(path: str) -> Optional[str]:
     return None
 
 
-def chunk_files(files: List[str], size: int = ALBUM_CHUNK_SIZE) -> List[List[str]]:
-    """Split *files* into sub-lists of at most *size* elements.
-
-    Args:
-        files: Sorted list of file paths to upload.
-        size:  Maximum number of files per chunk (default: 10).
-
-    Returns:
-        A list of lists, each with at most *size* file paths.
-    """
-    return [files[i : i + size] for i in range(0, len(files), size)]
-
-
-def _make_input_media(path: str):
-    """Build the appropriate :class:`~pyrogram.types.InputMedia` object for *path*.
-
-    Videos become :class:`InputMediaVideo` (with streaming enabled), images
-    become :class:`InputMediaPhoto`, and everything else becomes
-    :class:`InputMediaDocument`.
-
-    Args:
-        path: Absolute (or relative) path to the file.
-    """
-    caption = _file_caption(path) or ""
-    if _is_video(path):
-        return InputMediaVideo(path, caption=caption, supports_streaming=True)
-    if _is_image(path):
-        return InputMediaPhoto(path, caption=caption)
-    return InputMediaDocument(path)
-
-
 async def upload_files(
     client: object,
     target_chat_id: object,
@@ -149,7 +114,7 @@ async def upload_files(
     status_message: object,
     show_completion: bool = True,
 ) -> None:
-    """Upload all *files* to *target_chat_id*, respecting Telegram's album limit.
+    """Upload all *files* to *target_chat_id* one-by-one.
 
     Files larger than :data:`TELEGRAM_MAX_FILE_SIZE` are automatically split
     into numbered parts (``.001``, ``.002``, …) so the recipient can
@@ -180,21 +145,18 @@ async def upload_files(
         parts = split_large_file(f)
         expanded_files.extend(parts)
 
-    chunks = chunk_files(expanded_files)
-    total_chunks = len(chunks)
+    total_files = len(expanded_files)
 
-    for chunk_idx, chunk in enumerate(chunks, start=1):
+    for file_idx, file_path in enumerate(expanded_files, start=1):
         if ut.cancel_flag:
             raise asyncio.CancelledError("Upload cancelled by user.")
 
-        chunk_label = f"Batch {chunk_idx}/{total_chunks}" if total_chunks > 1 else ""
+        file_label = f"File {file_idx}/{total_files}" if total_files > 1 else ""
 
-        # Build a progress callback bound to this chunk.
+        # Build a progress callback bound to this file.
         last_edit: list = [0.0]
         # Speed tracking: [prev_bytes, prev_monotonic_time]
         speed_state: list = [0, time.monotonic()]
-
-        single_file = len(chunk) == 1
 
         async def _progress_callback(current: int, total: int) -> None:
             """Pyrogram-compatible upload progress callback."""
@@ -213,73 +175,44 @@ async def upload_files(
             bar = format_progress_bar(current, total)
             size_info = f"{format_size(current)} / {format_size(total)}"
             speed_info = format_speed(speed)
-            prefix = f"📤 Uploading {chunk_label}\n" if chunk_label else "📤 Uploading\n"
+            prefix = f"📤 Uploading {file_label}\n" if file_label else "📤 Uploading\n"
             text = f"{prefix}{bar}\n{size_info} • {speed_info}"
 
             await safe_edit_message(status_message, text, last_edit)
 
         try:
-            if single_file:
-                file_path = chunk[0]
-                caption = _file_caption(file_path) or ""
-                if _is_video(file_path):
-                    await client.send_video(  # type: ignore[attr-defined]
+            caption = _file_caption(file_path) or ""
+            if _is_video(file_path):
+                await client.send_video(  # type: ignore[attr-defined]
+                    target_chat_id,
+                    file_path,
+                    caption=caption,
+                    supports_streaming=True,
+                    progress=_progress_callback,
+                )
+            elif _is_image(file_path):
+                try:
+                    await client.send_photo(  # type: ignore[attr-defined]
                         target_chat_id,
                         file_path,
                         caption=caption,
-                        supports_streaming=True,
                         progress=_progress_callback,
                     )
-                elif _is_image(file_path):
-                    try:
-                        await client.send_photo(  # type: ignore[attr-defined]
-                            target_chat_id,
-                            file_path,
-                            caption=caption,
-                            progress=_progress_callback,
-                        )
-                    except PhotoInvalidDimensions:
-                        # Image dimensions rejected by Telegram (e.g. very tall
-                        # manga pages); send as a document instead.
-                        await client.send_document(  # type: ignore[attr-defined]
-                            target_chat_id,
-                            file_path,
-                            caption=caption,
-                            progress=_progress_callback,
-                        )
-                else:
+                except PhotoInvalidDimensions:
+                    # Image dimensions rejected by Telegram (e.g. very tall
+                    # manga pages); send as a document instead.
                     await client.send_document(  # type: ignore[attr-defined]
                         target_chat_id,
                         file_path,
+                        caption=caption,
                         progress=_progress_callback,
                     )
             else:
-                # For albums: send_media_group does not support a per-file
-                # progress callback, so we update the status message once
-                # before sending the batch.
-                await safe_edit_message(
-                    status_message,
-                    f"📤 Uploading {chunk_label or 'album'}…",
-                    last_edit,
-                    force=True,
+                await client.send_document(  # type: ignore[attr-defined]
+                    target_chat_id,
+                    file_path,
+                    progress=_progress_callback,
                 )
-                media_list = [_make_input_media(f) for f in chunk]
-                try:
-                    await client.send_media_group(  # type: ignore[attr-defined]
-                        target_chat_id,
-                        media_list,
-                    )
-                except PhotoInvalidDimensions:
-                    # At least one photo in the album has invalid dimensions;
-                    # retry with all images sent as documents.
-                    media_list = [
-                        InputMediaDocument(f) if _is_image(f) else _make_input_media(f)
-                        for f in chunk
-                    ]
-                    await client.send_media_group(  # type: ignore[attr-defined]
-                        target_chat_id,
-                        media_list,
-                    )
         except CancelUploadException:
             raise asyncio.CancelledError("Upload cancelled by user.")
 
