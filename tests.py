@@ -803,5 +803,275 @@ class TestWebui(unittest.TestCase):
         self.assertGreaterEqual(stats["active_jobs"], 0)
 
 
+# ---------------------------------------------------------------------------
+# bot.py helper function tests (PendingJob, _build_menu, _build_custom_input_prompt)
+# ---------------------------------------------------------------------------
+
+class TestBotHelpers(unittest.TestCase):
+    """Tests for the bot.py configuration-menu helper functions."""
+
+    def _make_pj(self, **kwargs):
+        """Create a PendingJob with sensible defaults, overridden by kwargs."""
+        from bot import PendingJob
+        defaults = dict(
+            url="https://example.com/gallery",
+            user_id=42,
+            source_chat_id=100,
+            target_chat_id=100,
+            use_current_chat=True,
+            mode="default",
+            awaiting_custom_input=False,
+            menu_message_id=7,
+        )
+        defaults.update(kwargs)
+        return PendingJob(**defaults)
+
+    # ------------------------------------------------------------------
+    # PendingJob defaults
+    # ------------------------------------------------------------------
+
+    def test_pending_job_defaults(self):
+        from bot import PendingJob
+        pj = PendingJob(
+            url="https://x.com/p",
+            user_id=1,
+            source_chat_id=10,
+            target_chat_id=10,
+        )
+        self.assertTrue(pj.use_current_chat)
+        self.assertEqual(pj.mode, "default")
+        self.assertFalse(pj.awaiting_custom_input)
+        self.assertEqual(pj.menu_message_id, 0)
+
+    # ------------------------------------------------------------------
+    # _next_pending_id
+    # ------------------------------------------------------------------
+
+    def test_next_pending_id_increments(self):
+        from bot import _next_pending_id
+        id1 = _next_pending_id()
+        id2 = _next_pending_id()
+        self.assertGreater(id2, id1)
+
+    # ------------------------------------------------------------------
+    # _build_menu
+    # ------------------------------------------------------------------
+
+    def test_build_menu_contains_url(self):
+        from bot import _build_menu
+        pj = self._make_pj(url="https://example.com/x")
+        text, markup = _build_menu(1, pj)
+        self.assertIn("https://example.com/x", text)
+
+    def test_build_menu_current_chat_selected_by_default(self):
+        from bot import _build_menu
+        pj = self._make_pj(use_current_chat=True)
+        text, markup = _build_menu(1, pj)
+        # The "Current chat" button should have the check mark.
+        btn_labels = [
+            btn.text
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        current_btn = next(b for b in btn_labels if "Current" in b)
+        self.assertIn("✓", current_btn)
+
+    def test_build_menu_custom_chat_selected(self):
+        from bot import _build_menu
+        pj = self._make_pj(use_current_chat=False, target_chat_id="@chan")
+        text, markup = _build_menu(5, pj)
+        btn_labels = [
+            btn.text
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        custom_btn = next(b for b in btn_labels if "Custom" in b)
+        self.assertIn("✓", custom_btn)
+        # Destination should be shown in the text.
+        self.assertIn("@chan", text)
+
+    def test_build_menu_default_mode_selected(self):
+        from bot import _build_menu
+        pj = self._make_pj(mode="default")
+        _, markup = _build_menu(1, pj)
+        btn_labels = [
+            btn.text
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        default_btn = next(b for b in btn_labels if "Default" in b)
+        duplex_btn = next(b for b in btn_labels if "Duplex" in b)
+        self.assertIn("✓", default_btn)
+        self.assertNotIn("✓", duplex_btn)
+
+    def test_build_menu_duplex_mode_selected(self):
+        from bot import _build_menu
+        pj = self._make_pj(mode="duplex")
+        _, markup = _build_menu(1, pj)
+        btn_labels = [
+            btn.text
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        default_btn = next(b for b in btn_labels if "Default" in b)
+        duplex_btn = next(b for b in btn_labels if "Duplex" in b)
+        self.assertNotIn("✓", default_btn)
+        self.assertIn("✓", duplex_btn)
+
+    def test_build_menu_has_run_and_cancel_buttons(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        _, markup = _build_menu(1, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:r:" in d for d in btn_data))
+        self.assertTrue(any("gdl:x:" in d for d in btn_data))
+
+    def test_build_menu_callback_data_contains_pid(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        pid = 999
+        _, markup = _build_menu(pid, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(all(str(pid) in d for d in btn_data))
+
+    def test_build_menu_has_three_rows(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        _, markup = _build_menu(1, pj)
+        self.assertEqual(len(markup.inline_keyboard), 3)
+
+    # ------------------------------------------------------------------
+    # _build_custom_input_prompt
+    # ------------------------------------------------------------------
+
+    def test_build_custom_input_prompt_contains_url(self):
+        from bot import _build_custom_input_prompt
+        pj = self._make_pj(url="https://example.com/p")
+        text, markup = _build_custom_input_prompt(2, pj)
+        self.assertIn("https://example.com/p", text)
+
+    def test_build_custom_input_prompt_contains_cancel_button(self):
+        from bot import _build_custom_input_prompt
+        pj = self._make_pj()
+        _, markup = _build_custom_input_prompt(2, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:xcu:" in d for d in btn_data))
+
+    def test_build_custom_input_prompt_error_shown(self):
+        from bot import _build_custom_input_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_input_prompt(2, pj, error="Invalid format.")
+        self.assertIn("Invalid format.", text)
+
+    def test_build_custom_input_prompt_no_error_by_default(self):
+        from bot import _build_custom_input_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_input_prompt(2, pj)
+        self.assertNotIn("⚠️", text)
+
+
+# ---------------------------------------------------------------------------
+# bot.py duplex pipeline tests
+# ---------------------------------------------------------------------------
+
+class TestDuplexPipeline(unittest.TestCase):
+    """Tests for the duplex-mode _pipeline logic."""
+
+    def _run_pipeline_duplex(self, files_on_disk):
+        """Run _pipeline in duplex mode with mocked gallery-dl and upload."""
+        import bot as bot_module
+        from bot import _pipeline
+        from task_manager import TaskManager, UserTask
+
+        # Patch the module-level client and cfg that _pipeline uses.
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_status = AsyncMock()
+        mock_status.edit = AsyncMock()
+
+        original_client = bot_module.client
+        original_cfg = bot_module.cfg
+        bot_module.client = mock_client
+        bot_module.cfg = None  # No gallery-dl config needed.
+
+        tm = TaskManager()
+        job_id, ut = tm.create(user_id=1)
+        ut.cancel_flag = False
+
+        queued_paths = []
+
+        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file):
+            for p in files_on_disk:
+                queued_paths.append(p)
+                await on_file(p)
+            return files_on_disk
+
+        async def fake_upload_files(client, target_chat_id, ut, files,
+                                    status_message, show_completion=True):
+            pass  # No-op; we only verify it was called.
+
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                with (
+                    patch("bot.run_gallery_dl", fake_run_gallery_dl),
+                    patch("bot.upload_files", fake_upload_files),
+                    patch("bot.task_manager", tm),
+                ):
+                    asyncio.run(
+                        _pipeline(
+                            job_id=job_id,
+                            ut=ut,
+                            url="https://example.com",
+                            temp_dir=tmp,
+                            target_chat_id=1,
+                            status_message=mock_status,
+                            mode="duplex",
+                        )
+                    )
+            finally:
+                bot_module.client = original_client
+                bot_module.cfg = original_cfg
+
+        return queued_paths, mock_status
+
+    def test_duplex_pipeline_queues_all_files(self):
+        """In duplex mode all files reported by gallery-dl are queued."""
+        files = ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.mp4"]
+        queued, _ = self._run_pipeline_duplex(files)
+        self.assertEqual(queued, files)
+
+    def test_duplex_pipeline_completion_message(self):
+        """Duplex mode edits the status message to '✅ Upload Complete!'."""
+        files = ["/tmp/x.jpg"]
+        _, mock_status = self._run_pipeline_duplex(files)
+        # The last edit call should contain "✅ Upload Complete!".
+        edit_calls = [str(c) for c in mock_status.edit.call_args_list]
+        self.assertTrue(
+            any("Upload Complete" in c for c in edit_calls),
+            f"Expected 'Upload Complete' in edit calls: {edit_calls}",
+        )
+
+    def test_duplex_pipeline_no_files_shows_warning(self):
+        """Duplex mode with no downloaded files shows the 'no files' warning."""
+        _, mock_status = self._run_pipeline_duplex([])
+        edit_calls = [str(c) for c in mock_status.edit.call_args_list]
+        self.assertTrue(
+            any("No files" in c or "⚠️" in c for c in edit_calls),
+            f"Expected warning in edit calls: {edit_calls}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
