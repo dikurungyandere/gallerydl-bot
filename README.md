@@ -11,9 +11,12 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
+- 🔄 **Streaming pipeline** — each file is uploaded to Telegram as soon as it finishes downloading; no need to wait for an entire gallery to complete before the first file arrives
 - 📡 **Custom forwarding target** — append `-> @channel` or `-> -100xxx` to send files to a specific chat
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
 - 🔀 **Album support** — batch downloads are automatically chunked into albums of ≤ 10 files (Telegram's limit)
+- ✂️ **Automatic file splitting** — files larger than ~1950 MB are split into numbered parts (`.001`, `.002`, …) so they can be uploaded and manually reassembled: `cat file.mp4.001 file.mp4.002 > file.mp4`
+- 🎬 **Streamable video** — video files are sent as Telegram videos (not documents) with `supports_streaming=True`, so they play directly in the app without downloading
 - ❌ **Cancellation** — `/cancel` stops all jobs; `/cancel <job_id>` stops a specific one
 - 📈 **Stats command** — `/stats` shows CPU, memory, disk usage and active job count
 - 🌐 **Optional Web UI** — a lightweight HTTP status page for PaaS platforms (`WEBUI=true`)
@@ -187,7 +190,36 @@ Copy `.env.example` to `.env` and fill in the values.
 Send any supported URL as a plain message to start a download. The bot will
 reply with a status message that updates as the download and upload progress.
 
+Each file is uploaded to Telegram **as soon as it finishes downloading** — you
+do not have to wait for an entire gallery to complete before the first file
+arrives in your chat.
+
 Multiple URLs can be sent at once — each starts an independent parallel job.
+
+### Large files (> ~1950 MB)
+
+Files that exceed Telegram's per-file upload limit are automatically split into
+numbered parts:
+
+```
+file.mp4.001
+file.mp4.002
+…
+```
+
+Reassemble them on your device:
+
+```bash
+cat file.mp4.001 file.mp4.002 > file.mp4
+```
+
+### Video streaming
+
+Video files (`.mp4`, `.mkv`, `.webm`, …) are sent as **Telegram videos** with
+`supports_streaming=True` so they play directly in the Telegram app without
+downloading the full file first.  No ffmpeg is required on the server side; for
+the best streaming experience the source video should have its moov atom at the
+front of the file (MP4 "faststart" encoding).
 
 ---
 

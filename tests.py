@@ -520,6 +520,80 @@ class TestUploader(unittest.TestCase):
         call_args = mock_client.send_file.call_args
         self.assertEqual(call_args[0][0], target)
 
+    # ------------------------------------------------------------------
+    # split_large_file tests
+    # ------------------------------------------------------------------
+
+    def test_split_large_file_no_split_needed(self):
+        """Files under the size limit are returned as a single-item list."""
+        from uploader import split_large_file
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"x" * 100)
+            path = f.name
+        try:
+            result = split_large_file(path, max_size=1000)
+            self.assertEqual(result, [path])
+        finally:
+            os.unlink(path)
+
+    def test_split_large_file_splits_into_parts(self):
+        """A file larger than max_size is split into the correct number of parts."""
+        from uploader import split_large_file
+        data = b"A" * 1000
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(data)
+            path = f.name
+        try:
+            parts = split_large_file(path, max_size=300)
+            self.assertEqual(len(parts), 4)  # ceil(1000/300) = 4
+            self.assertTrue(parts[0].endswith(".001"))
+            self.assertTrue(parts[1].endswith(".002"))
+            # Reassembled content matches original.
+            reassembled = b""
+            for p in parts:
+                with open(p, "rb") as fh:
+                    reassembled += fh.read()
+            self.assertEqual(reassembled, data)
+        finally:
+            os.unlink(path)
+            for p in parts:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_split_large_file_nonexistent_returns_path(self):
+        """A missing file is returned as-is without raising."""
+        from uploader import split_large_file
+        result = split_large_file("/nonexistent/path/file.mp4")
+        self.assertEqual(result, ["/nonexistent/path/file.mp4"])
+
+    # ------------------------------------------------------------------
+    # _is_video tests
+    # ------------------------------------------------------------------
+
+    def test_is_video_mp4(self):
+        from uploader import _is_video
+        self.assertTrue(_is_video("clip.mp4"))
+
+    def test_is_video_mkv(self):
+        from uploader import _is_video
+        self.assertTrue(_is_video("clip.mkv"))
+
+    def test_is_video_webm(self):
+        from uploader import _is_video
+        self.assertTrue(_is_video("clip.webm"))
+
+    def test_is_video_jpg_is_false(self):
+        from uploader import _is_video
+        self.assertFalse(_is_video("photo.jpg"))
+
+    def test_is_video_png_is_false(self):
+        from uploader import _is_video
+        self.assertFalse(_is_video("image.png"))
+
+    def test_is_video_no_extension_is_false(self):
+        from uploader import _is_video
+        self.assertFalse(_is_video("noextension"))
+
 
 # ---------------------------------------------------------------------------
 # downloader.py tests

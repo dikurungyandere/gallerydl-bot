@@ -1,6 +1,11 @@
 """
 gallerydl-bot: A Telegram bot that downloads media via gallery-dl and uploads
-it back to the user using Telethon (MTProto, up to 2 GB).
+it back to the user using Telethon (MTProto).
+
+Files are uploaded as soon as each one is downloaded (streaming pipeline).
+Files larger than ~1950 MB are automatically split into numbered parts so they
+can be uploaded within Telegram's per-file limit and manually reassembled.
+Video files are sent as streamable Telegram videos rather than documents.
 
 AI-GENERATED CODE DISCLAIMER: This entire codebase has been created by AI.
 Treat it carefully and review before deploying to production.
@@ -94,7 +99,9 @@ HELP_TEXT = (
     "otherwise the upload will fail with a permissions error.\n\n"
     "**Limits**\n"
     "• Albums are split into chunks of 10 (Telegram limit).\n"
-    "• Maximum upload size is ~2 GB per file (MTProto).\n"
+    "• Files larger than ~1950 MB are automatically split into numbered parts\n"
+    "  (``.001``, ``.002``, …). Reassemble with: "
+    "`cat file.mp4.001 file.mp4.002 > file.mp4`\n"
     "• Only URLs listed in `gallery-dl`'s supported sites work.\n\n"
     "**Commands**\n"
     "• /stats — Show CPU, memory, disk and active job count.\n"
@@ -288,22 +295,42 @@ async def _pipeline(
     target_chat_id: Union[int, str],
     status_message,
 ) -> None:
-    """Run the full download → upload pipeline for a single job."""
+    """Run the full download → upload pipeline for a single job.
+
+    Files are uploaded to Telegram as soon as gallery-dl reports each one on
+    stdout (streaming pipeline), rather than waiting for the entire batch to
+    finish downloading first.  Any files that gallery-dl did not report via
+    stdout (fallback directory scan) are uploaded after the subprocess exits.
+    """
     last_edit: list = [0.0]
 
     try:
         # ----------------------------------------------------------------
-        # Step 1: Download via gallery-dl
+        # Step 1: Download via gallery-dl, uploading each file immediately
         # ----------------------------------------------------------------
-        file_count_ref: list = [0]
+        n_downloaded = 0
+        uploaded_paths: set = set()
 
-        async def on_download_progress(n_files: int) -> None:
-            file_count_ref[0] = n_files
+        async def on_file(path: str) -> None:
+            """Called by run_gallery_dl for each file as it is downloaded."""
+            nonlocal n_downloaded
+            n_downloaded += 1
+            if ut.cancel_flag:
+                return
             await safe_edit_message(
                 status_message,
-                f"📥 Downloading… {n_files} file(s) so far. (job #{job_id})",
+                f"📥 Downloaded file {n_downloaded}, uploading… (job #{job_id})",
                 last_edit,
             )
+            await upload_files(
+                client=client,
+                target_chat_id=target_chat_id,
+                ut=ut,
+                files=[path],
+                status_message=status_message,
+                show_completion=False,
+            )
+            uploaded_paths.add(path)
 
         config_path = cfg.gallery_dl_config_path if cfg else None
         files = await run_gallery_dl(
@@ -311,13 +338,13 @@ async def _pipeline(
             url=url,
             temp_dir=temp_dir,
             config_path=config_path,
-            on_progress=on_download_progress,
+            on_file=on_file,
         )
 
         if ut.cancel_flag:
             return
 
-        if not files:
+        if not files and not uploaded_paths:
             await safe_edit_message(
                 status_message,
                 (
@@ -330,22 +357,36 @@ async def _pipeline(
             return
 
         # ----------------------------------------------------------------
-        # Step 2: Upload to Telegram
+        # Step 2: Upload any files not already sent (fallback scan results)
         # ----------------------------------------------------------------
-        await safe_edit_message(
-            status_message,
-            f"✅ Downloaded {len(files)} file(s). Starting upload… (job #{job_id})",
-            last_edit,
-            force=True,
-        )
+        remaining = [f for f in files if f not in uploaded_paths]
 
-        await upload_files(
-            client=client,
-            target_chat_id=target_chat_id,
-            ut=ut,
-            files=files,
-            status_message=status_message,
-        )
+        if remaining:
+            await safe_edit_message(
+                status_message,
+                (
+                    f"✅ Downloaded {len(files)} file(s). "
+                    f"Uploading {len(remaining)} remaining… (job #{job_id})"
+                ),
+                last_edit,
+                force=True,
+            )
+            await upload_files(
+                client=client,
+                target_chat_id=target_chat_id,
+                ut=ut,
+                files=remaining,
+                status_message=status_message,
+                show_completion=True,
+            )
+        else:
+            # All files were already uploaded via the on_file callback.
+            await safe_edit_message(
+                status_message,
+                "✅ Upload Complete!",
+                [0.0],
+                force=True,
+            )
 
     except asyncio.CancelledError:
         logger.info("Pipeline cancelled for job #%s.", job_id)

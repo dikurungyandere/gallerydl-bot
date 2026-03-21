@@ -47,7 +47,7 @@ async def run_gallery_dl(
     url: str,
     temp_dir: str,
     config_path: Optional[str],
-    on_progress: Callable[[int], Awaitable[None]],
+    on_file: Callable[[str], Awaitable[None]],
 ) -> List[str]:
     """Run gallery-dl and collect downloaded file paths.
 
@@ -60,11 +60,14 @@ async def run_gallery_dl(
         url:         URL to download.
         temp_dir:    Directory where gallery-dl writes files.
         config_path: Optional path to gallery-dl config file.
-        on_progress: Async callback called with the number of files downloaded
-                     so far (after each new file appears in stdout).
+        on_file:     Async callback called with the absolute path of each file
+                     as soon as gallery-dl reports it on stdout.  Use this to
+                     upload files immediately rather than waiting for the whole
+                     batch to finish.
 
     Returns:
-        Sorted list of absolute paths to downloaded files.
+        Sorted list of absolute paths to all downloaded files (including any
+        that were not reported via stdout and discovered by directory scan).
 
     Raises:
         RuntimeError: If gallery-dl exits with a non-zero code.
@@ -83,7 +86,7 @@ async def run_gallery_dl(
     downloaded_files: List[str] = []
 
     async def _read_stdout() -> None:
-        """Read gallery-dl stdout line-by-line, counting downloaded files."""
+        """Read gallery-dl stdout line-by-line, calling on_file for each."""
         assert process.stdout is not None
         async for raw_line in process.stdout:
             if ut.cancel_flag:
@@ -93,7 +96,7 @@ async def run_gallery_dl(
             # gallery-dl prints downloaded file paths to stdout.
             if line and os.path.isabs(line):
                 downloaded_files.append(line)
-                await on_progress(len(downloaded_files))
+                await on_file(line)
 
     # Read stdout with no timeout — let gallery-dl run as long as it needs.
     await _read_stdout()
