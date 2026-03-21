@@ -195,6 +195,7 @@ async def upload_files(
             else:
                 text = progress_content
 
+            ut.progress_text = progress_content
             await safe_edit_message(status_message, text, last_edit)
 
         try:
@@ -247,3 +248,7 @@ async def upload_files(
             status_message.chat.id,  # type: ignore[attr-defined]
             summary,
         )
+        try:
+            await status_message.delete()  # type: ignore[attr-defined]
+        except Exception:
+            pass
