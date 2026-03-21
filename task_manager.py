@@ -29,6 +29,12 @@ class UserTask:
     cancel_flag: bool = False
     # The Telegram Message object used to display status updates.
     status_message: object = None
+    # Source URL being processed (used by /status).
+    url: str = ""
+    # Upload mode: "default" or "duplex" (used by /status).
+    mode: str = "default"
+    # Latest progress content text (used by /status to show live state).
+    progress_text: str = "⏳ Starting…"
 
 
 class TaskManager:

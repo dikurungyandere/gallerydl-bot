@@ -25,6 +25,7 @@ Usage:
 
 import asyncio
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Union
@@ -42,7 +43,7 @@ from config import Config, load_config
 from downloader import URL_RE, run_gallery_dl
 from task_manager import UserTask, task_manager
 from uploader import upload_files
-from utils import cleanup_directory, safe_edit_message
+from utils import cleanup_directory, format_size, format_status_message, safe_edit_message
 from webui import collect_stats, format_uptime
 
 logging.basicConfig(
@@ -95,6 +96,7 @@ START_TEXT = (
     "• /start — Show this message\n"
     "• /help  — Show usage instructions\n"
     "• /stats — Show server and bot statistics\n"
+    "• /status — Show your currently running jobs\n"
     "• /cancel — Cancel **all** your active downloads/uploads\n"
     "• /cancel `<job_id>` — Cancel a specific job (ID shown in the status message)\n\n"
     "_⚠️ This bot was created by AI. Use at your own risk._"
@@ -123,6 +125,7 @@ HELP_TEXT = (
     "• Only URLs listed in `gallery-dl`'s supported sites work.\n\n"
     "**Commands**\n"
     "• /stats — Show CPU, memory, disk and active job count.\n"
+    "• /status — Show your currently running jobs with live progress.\n"
     "• /cancel — Stop **all** active downloads/uploads.\n"
     "• /cancel `<job_id>` — Stop a specific job.\n\n"
     "_⚠️ This bot was created by AI. Review the source before trusting it._"
@@ -278,6 +281,37 @@ async def stats_handler(client, message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# /status handler
+# ---------------------------------------------------------------------------
+
+def _build_status_text(user_id: int) -> str:
+    """Build the status overview for all active jobs of *user_id*."""
+    active = task_manager.get_user_tasks(user_id)
+    if not active:
+        return "ℹ️ You have no active jobs."
+    parts = [
+        format_status_message(ut.url, jid, ut.mode, ut.progress_text)
+        for jid, ut in active
+    ]
+    return "\n\n—\n\n".join(parts)
+
+
+@require_allowed
+async def status_handler(client, message) -> None:
+    """Handle the /status command — show running jobs with a Refresh button."""
+    user_id: int = message.from_user.id
+    active = task_manager.get_user_tasks(user_id)
+    text = _build_status_text(user_id)
+    if not active:
+        await message.reply(text)
+        return
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🔄 Refresh", callback_data="gdl:ref:0")]]
+    )
+    await message.reply(text, reply_markup=markup)
+
+
+# ---------------------------------------------------------------------------
 # /cancel handler
 # ---------------------------------------------------------------------------
 
@@ -317,32 +351,16 @@ async def cancel_handler(client, message) -> None:
             await message.reply(f"ℹ️ No active job #{job_id_arg} found.")
             return
 
-        status_msg = ut.status_message
         cancelled = await task_manager.cancel(job_id_arg)
         if cancelled:
-            if status_msg is not None:
-                try:
-                    await status_msg.edit(f"❌ Job #{job_id_arg} cancelled by user.")
-                except Exception:
-                    pass
-            else:
-                await message.reply(f"❌ Job #{job_id_arg} cancelled by user.")
+            await message.reply(f"⏳ Cancellation requested for job #{job_id_arg}.")
         else:
             await message.reply(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
     else:
         # Cancel all jobs for this user.
-        # Edit each status message before cancelling so the user sees which
-        # jobs were stopped.
-        for jid, ut in active_jobs:
-            if ut.status_message is not None:
-                try:
-                    await ut.status_message.edit(f"❌ Job #{jid} cancelled by user.")
-                except Exception:
-                    pass
-
         count = await task_manager.cancel_all(user_id)
         if count:
-            await message.reply(f"❌ Cancelled {count} active job(s).")
+            await message.reply(f"⏳ Cancellation requested for {count} active job(s).")
         else:
             await message.reply("ℹ️ Nothing to cancel.")
 
@@ -435,7 +453,26 @@ async def _handle_custom_input(
                 pass
         return
 
-    # Valid — update pending job and show the main menu again.
+    # Verify the bot has access to the requested chat before accepting it.
+    try:
+        await client.get_chat(target)
+    except Exception:
+        prompt_text, markup = _build_custom_input_prompt(
+            pid,
+            pj,
+            error=(
+                f"Unable to access `{target}`. "
+                "The chat may not exist, or the bot may not be a member/admin."
+            ),
+        )
+        if menu_msg:
+            try:
+                await menu_msg.edit(prompt_text, reply_markup=markup)
+            except Exception:
+                pass
+        return
+
+    # Valid and accessible — update pending job and show the main menu again.
     pj.target_chat_id = target
     pj.use_current_chat = False
     pj.awaiting_custom_input = False
@@ -468,6 +505,32 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         pid = int(parts[2])
     except ValueError:
         await callback_query.answer("Invalid job ID.")
+        return
+
+    # ---- Status refresh (no pending job needed) ----
+    if action == "ref":
+        user_id = callback_query.from_user.id
+        if cfg and cfg.allowed_users and user_id not in cfg.allowed_users:
+            await callback_query.answer("Unauthorized.", show_alert=True)
+            return
+        msg = callback_query.message
+        active = task_manager.get_user_tasks(user_id)
+        if not active:
+            try:
+                await msg.edit("ℹ️ You have no active jobs.", reply_markup=None)
+            except Exception:
+                pass
+            await callback_query.answer("No active jobs.")
+        else:
+            text = _build_status_text(user_id)
+            markup = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔄 Refresh", callback_data="gdl:ref:0")]]
+            )
+            try:
+                await msg.edit(text, reply_markup=markup)
+            except Exception:
+                pass
+            await callback_query.answer("Refreshed.")
         return
 
     pj = _pending.get(pid)
@@ -537,7 +600,9 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         ut.temp_dir = temp_dir
 
         # Repurpose the menu message as the status message.
-        await msg.edit(f"⏳ Starting download… (job #{job_id})")
+        await msg.edit(
+            format_status_message(pj.url, job_id, pj.mode, "⏳ Starting download…")
+        )
         ut.status_message = msg
 
         task = asyncio.create_task(
@@ -584,6 +649,11 @@ async def _pipeline(
     last_edit: list = [0.0]
     config_path = cfg.gallery_dl_config_path if cfg else None
 
+    # Populate UserTask fields so /status can show live information.
+    ut.url = url
+    ut.mode = mode
+    ut.progress_text = "⏳ Starting download…"
+
     # upload_task is only used in duplex mode; keep a reference so we can
     # cancel it in exception handlers.
     upload_task: Optional[asyncio.Task] = None
@@ -609,9 +679,11 @@ async def _pipeline(
                 n_downloaded += 1
                 queued_files.add(path)
                 await file_queue.put(path)
+                progress = f"📥 Downloading… {n_downloaded} file(s) · uploading…"
+                ut.progress_text = progress
                 await safe_edit_message(
                     status_message,
-                    f"📥 Downloading… {n_downloaded} file(s) · uploading… (job #{job_id})",
+                    format_status_message(url, job_id, mode, progress),
                     last_edit,
                 )
 
@@ -632,6 +704,9 @@ async def _pipeline(
                             files=[item],
                             status_message=status_message,
                             show_completion=False,
+                            url=url,
+                            job_id=job_id,
+                            mode=mode,
                         )
                     finally:
                         file_queue.task_done()
@@ -677,15 +752,26 @@ async def _pipeline(
                     files=extra_files,
                     status_message=status_message,
                     show_completion=False,
+                    url=url,
+                    job_id=job_id,
+                    mode=mode,
                 )
 
             if not ut.cancel_flag:
-                await safe_edit_message(
-                    status_message,
-                    "✅ Upload Complete!",
-                    [0.0],
-                    force=True,
+                total_size = sum(
+                    os.path.getsize(f) for f in files if os.path.isfile(f)
                 )
+                summary = (
+                    f"✅ **Upload completed**\n\n"
+                    f"🔗 **Link:** `{url}`\n"
+                    f"**File count:** {len(files)}\n"
+                    f"**Total size:** {format_size(total_size)}"
+                )
+                await client.send_message(status_message.chat.id, summary)
+                try:
+                    await status_message.delete()
+                except Exception:
+                    pass
 
         else:
             # ----------------------------------------------------------------
@@ -698,9 +784,11 @@ async def _pipeline(
                 n_downloaded += 1
                 if ut.cancel_flag:
                     return
+                progress = f"📥 Downloading… {n_downloaded} file(s) so far"
+                ut.progress_text = progress
                 await safe_edit_message(
                     status_message,
-                    f"📥 Downloading… {n_downloaded} file(s) so far (job #{job_id})",
+                    format_status_message(url, job_id, mode, progress),
                     last_edit,
                 )
 
@@ -729,7 +817,12 @@ async def _pipeline(
 
             await safe_edit_message(
                 status_message,
-                f"✅ Downloaded {len(files)} file(s). Uploading… (job #{job_id})",
+                format_status_message(
+                    url,
+                    job_id,
+                    mode,
+                    f"✅ Downloaded {len(files)} file(s). Uploading…",
+                ),
                 last_edit,
                 force=True,
             )
@@ -740,6 +833,9 @@ async def _pipeline(
                 files=files,
                 status_message=status_message,
                 show_completion=True,
+                url=url,
+                job_id=job_id,
+                mode=mode,
             )
 
     except asyncio.CancelledError:
@@ -752,7 +848,11 @@ async def _pipeline(
             except (asyncio.CancelledError, Exception):
                 pass
         try:
-            await status_message.edit(f"❌ Job #{job_id} cancelled by user.")
+            await client.send_message(
+                status_message.chat.id,
+                f"❌ Job #{job_id} cancelled by user.",
+            )
+            await status_message.delete()
         except Exception:
             pass
 
@@ -760,9 +860,12 @@ async def _pipeline(
         wait = exc.value
         logger.warning("FloodWait for job #%s. Waiting %s s.", job_id, wait)
         try:
-            await status_message.edit(
-                f"⚠️ Telegram rate limit hit. Please wait {wait} seconds and try again."
+            await client.send_message(
+                status_message.chat.id,
+                f"⚠️ Telegram rate limit hit for job #{job_id}. "
+                f"Please wait {wait} seconds and try again.",
             )
+            await status_message.delete()
         except Exception:
             pass
         await asyncio.sleep(wait)
@@ -770,14 +873,22 @@ async def _pipeline(
     except RuntimeError as exc:
         logger.error("Pipeline error for job #%s: %s", job_id, exc)
         try:
-            await status_message.edit(f"❌ Error: {exc}")
+            await client.send_message(
+                status_message.chat.id,
+                f"❌ Error in job #{job_id}: {exc}",
+            )
+            await status_message.delete()
         except Exception:
             pass
 
     except Exception as exc:
         logger.exception("Unexpected error for job #%s: %s", job_id, exc)
         try:
-            await status_message.edit(f"❌ Unexpected error: {exc}")
+            await client.send_message(
+                status_message.chat.id,
+                f"❌ Unexpected error in job #{job_id}: {exc}",
+            )
+            await status_message.delete()
         except Exception:
             pass
 
@@ -819,6 +930,7 @@ def main() -> None:
         client.add_handler(MessageHandler(start_handler, filters.command("start")))
         client.add_handler(MessageHandler(help_handler, filters.command("help")))
         client.add_handler(MessageHandler(stats_handler, filters.command("stats")))
+        client.add_handler(MessageHandler(status_handler, filters.command("status")))
         client.add_handler(MessageHandler(cancel_handler, filters.command("cancel")))
         # Text message handler: processes both custom-chat-input replies (which
         # may contain no URL) AND new URL messages.  The regex URL filter is
@@ -828,7 +940,7 @@ def main() -> None:
             MessageHandler(
                 text_message_handler,
                 filters.text
-                & ~filters.command(["start", "help", "stats", "cancel"]),
+                & ~filters.command(["start", "help", "stats", "status", "cancel"]),
             )
         )
         # Inline keyboard button handler.

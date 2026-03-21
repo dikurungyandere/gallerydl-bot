@@ -487,6 +487,41 @@ class TestUtils(unittest.TestCase):
         )
         mock_msg.edit.assert_called_once_with("forced")
 
+    def test_format_status_message_default_mode(self):
+        """format_status_message includes link, job ID, Default mode, progress, and cancel hint."""
+        from utils import format_status_message
+        result = format_status_message(
+            url="https://example.com/gallery",
+            job_id=42,
+            mode="default",
+            progress_content="📥 Downloading… 3 file(s) so far",
+        )
+        self.assertIn("https://example.com/gallery", result)
+        self.assertIn("42", result)
+        self.assertIn("Default", result)
+        self.assertNotIn("Duplex", result)
+        self.assertIn("📥 Downloading… 3 file(s) so far", result)
+        self.assertIn("/cancel 42", result)
+
+    def test_format_status_message_duplex_mode(self):
+        """format_status_message shows 'Duplex' for duplex mode."""
+        from utils import format_status_message
+        result = format_status_message(
+            url="https://example.com",
+            job_id=7,
+            mode="duplex",
+            progress_content="📥 Downloading…",
+        )
+        self.assertIn("Duplex", result)
+        self.assertNotIn("Default", result)
+
+    def test_format_status_message_contains_progress_header(self):
+        """format_status_message labels the progress section."""
+        from utils import format_status_message
+        result = format_status_message("https://x.com", 1, "default", "some progress")
+        self.assertIn("Progress", result)
+        self.assertIn("some progress", result)
+
 
 # ---------------------------------------------------------------------------
 # uploader.py tests
@@ -502,6 +537,7 @@ class TestUploader(unittest.TestCase):
 
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
 
         ut = UserTask(user_id=1)
@@ -529,6 +565,7 @@ class TestUploader(unittest.TestCase):
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
         mock_client.send_media_group = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
 
         ut = UserTask(user_id=1)
@@ -547,6 +584,86 @@ class TestUploader(unittest.TestCase):
 
         self.assertEqual(mock_client.send_photo.await_count, 2)
         mock_client.send_media_group.assert_not_called()
+
+    def test_upload_show_completion_sends_new_message(self):
+        """When show_completion=True, a new summary message is sent (not edit)."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+        mock_status.delete = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=True,
+                    url="https://example.com",
+                    job_id=5,
+                    mode="default",
+                )
+            )
+        finally:
+            os.unlink(path)
+
+        # A new message should be sent with the summary.
+        mock_client.send_message.assert_awaited_once()
+        call_text = mock_client.send_message.call_args[0][1]
+        self.assertIn("Upload completed", call_text)
+        self.assertIn("https://example.com", call_text)
+        self.assertIn("File count", call_text)
+        self.assertIn("Total size", call_text)
+        # The progress/status message must be deleted after success.
+        mock_status.delete.assert_awaited_once()
+
+    def test_upload_show_completion_false_no_summary(self):
+        """When show_completion=False, no summary message is sent."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=False,
+                )
+            )
+        finally:
+            os.unlink(path)
+
+        mock_client.send_message.assert_not_awaited()
 
     # ------------------------------------------------------------------
     # split_large_file tests
@@ -998,6 +1115,7 @@ class TestDuplexPipeline(unittest.TestCase):
         # Patch the module-level client and cfg that _pipeline uses.
         mock_client = MagicMock()
         mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
         mock_status = AsyncMock()
         mock_status.edit = AsyncMock()
 
@@ -1019,7 +1137,8 @@ class TestDuplexPipeline(unittest.TestCase):
             return files_on_disk
 
         async def fake_upload_files(client, target_chat_id, ut, files,
-                                    status_message, show_completion=True):
+                                    status_message, show_completion=True,
+                                    url="", job_id=0, mode="default"):
             pass  # No-op; we only verify it was called.
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1044,33 +1163,256 @@ class TestDuplexPipeline(unittest.TestCase):
                 bot_module.client = original_client
                 bot_module.cfg = original_cfg
 
-        return queued_paths, mock_status
+        return queued_paths, mock_client, mock_status
 
     def test_duplex_pipeline_queues_all_files(self):
         """In duplex mode all files reported by gallery-dl are queued."""
         files = ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.mp4"]
-        queued, _ = self._run_pipeline_duplex(files)
+        queued, _, _ = self._run_pipeline_duplex(files)
         self.assertEqual(queued, files)
 
     def test_duplex_pipeline_completion_message(self):
-        """Duplex mode edits the status message to '✅ Upload Complete!'."""
+        """Duplex mode sends a new summary message after all files are uploaded."""
         files = ["/tmp/x.jpg"]
-        _, mock_status = self._run_pipeline_duplex(files)
-        # The last edit call should contain "✅ Upload Complete!".
-        edit_calls = [str(c) for c in mock_status.edit.call_args_list]
+        _, mock_client, _ = self._run_pipeline_duplex(files)
+        # A new message should be sent (not just editing the status message).
+        send_calls = [str(c) for c in mock_client.send_message.call_args_list]
         self.assertTrue(
-            any("Upload Complete" in c for c in edit_calls),
-            f"Expected 'Upload Complete' in edit calls: {edit_calls}",
+            any("Upload completed" in c for c in send_calls),
+            f"Expected 'Upload completed' in send_message calls: {send_calls}",
         )
 
     def test_duplex_pipeline_no_files_shows_warning(self):
         """Duplex mode with no downloaded files shows the 'no files' warning."""
-        _, mock_status = self._run_pipeline_duplex([])
+        _, _, mock_status = self._run_pipeline_duplex([])
         edit_calls = [str(c) for c in mock_status.edit.call_args_list]
         self.assertTrue(
             any("No files" in c or "⚠️" in c for c in edit_calls),
             f"Expected warning in edit calls: {edit_calls}",
         )
+
+    def test_duplex_pipeline_deletes_status_message_on_success(self):
+        """Duplex mode deletes the status message after sending the summary."""
+        files = ["/tmp/x.jpg"]
+        _, _, mock_status = self._run_pipeline_duplex(files)
+        mock_status.delete.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# UserTask new fields
+# ---------------------------------------------------------------------------
+
+class TestUserTaskNewFields(unittest.TestCase):
+    """Tests for url/mode/progress_text fields added to UserTask."""
+
+    def test_user_task_default_url(self):
+        from task_manager import UserTask
+        ut = UserTask(user_id=1)
+        self.assertEqual(ut.url, "")
+
+    def test_user_task_default_mode(self):
+        from task_manager import UserTask
+        ut = UserTask(user_id=1)
+        self.assertEqual(ut.mode, "default")
+
+    def test_user_task_default_progress_text(self):
+        from task_manager import UserTask
+        ut = UserTask(user_id=1)
+        self.assertIn("Starting", ut.progress_text)
+
+    def test_user_task_fields_mutable(self):
+        from task_manager import UserTask
+        ut = UserTask(user_id=1)
+        ut.url = "https://example.com"
+        ut.mode = "duplex"
+        ut.progress_text = "📥 Downloading…"
+        self.assertEqual(ut.url, "https://example.com")
+        self.assertEqual(ut.mode, "duplex")
+        self.assertEqual(ut.progress_text, "📥 Downloading…")
+
+
+# ---------------------------------------------------------------------------
+# _build_status_text tests
+# ---------------------------------------------------------------------------
+
+class TestBuildStatusText(unittest.TestCase):
+    """Tests for the _build_status_text helper."""
+
+    def _make_active_task(self, tm, url, mode, progress):
+        from task_manager import UserTask
+        import asyncio
+        jid, ut = tm.create(user_id=42)
+        ut.url = url
+        ut.mode = mode
+        ut.progress_text = progress
+        # Give it a dummy non-done task so get_user_tasks returns it.
+        ut.task = asyncio.get_event_loop().create_future()
+        return jid, ut
+
+    def test_build_status_text_no_jobs(self):
+        from task_manager import TaskManager
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            import bot as bot_module
+            from bot import _build_status_text
+            original_tm = bot_module.task_manager
+            tm = TaskManager()
+            bot_module.task_manager = tm
+            try:
+                result = _build_status_text(42)
+                self.assertIn("no active", result.lower())
+            finally:
+                bot_module.task_manager = original_tm
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_build_status_text_with_one_job(self):
+        from task_manager import TaskManager
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            import bot as bot_module
+            from bot import _build_status_text
+            original_tm = bot_module.task_manager
+            tm = TaskManager()
+            bot_module.task_manager = tm
+            try:
+                jid, ut = self._make_active_task(
+                    tm, "https://example.com", "default", "📥 Downloading…"
+                )
+                result = _build_status_text(42)
+                self.assertIn("https://example.com", result)
+                self.assertIn(str(jid), result)
+                self.assertIn("Default", result)
+                self.assertIn("📥 Downloading…", result)
+                self.assertIn(f"/cancel {jid}", result)
+            finally:
+                bot_module.task_manager = original_tm
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def test_build_status_text_multiple_jobs_separated(self):
+        from task_manager import TaskManager
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            import bot as bot_module
+            from bot import _build_status_text
+            original_tm = bot_module.task_manager
+            tm = TaskManager()
+            bot_module.task_manager = tm
+            try:
+                self._make_active_task(tm, "https://a.com", "default", "p1")
+                self._make_active_task(tm, "https://b.com", "duplex", "p2")
+                result = _build_status_text(42)
+                self.assertIn("https://a.com", result)
+                self.assertIn("https://b.com", result)
+                self.assertIn("—", result)  # separator
+            finally:
+                bot_module.task_manager = original_tm
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline error notification tests
+# ---------------------------------------------------------------------------
+
+class TestPipelineErrorNotifications(unittest.TestCase):
+    """Tests that pipeline errors send a new message and delete the status msg."""
+
+    def _run_pipeline_with_error(self, error):
+        """Run _pipeline where gallery-dl raises *error*."""
+        import bot as bot_module
+        from bot import _pipeline
+        from task_manager import TaskManager
+
+        mock_client = MagicMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+        mock_status.edit = AsyncMock()
+        mock_status.delete = AsyncMock()
+        mock_status.chat = MagicMock()
+        mock_status.chat.id = 1
+
+        original_client = bot_module.client
+        original_cfg = bot_module.cfg
+        bot_module.client = mock_client
+        bot_module.cfg = None
+
+        tm = TaskManager()
+        job_id, ut = tm.create(user_id=1)
+        ut.cancel_flag = False
+
+        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file):
+            raise error
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                with (
+                    patch("bot.run_gallery_dl", fake_run_gallery_dl),
+                    patch("bot.task_manager", tm),
+                ):
+                    asyncio.run(
+                        _pipeline(
+                            job_id=job_id,
+                            ut=ut,
+                            url="https://example.com",
+                            temp_dir=tmp,
+                            target_chat_id=1,
+                            status_message=mock_status,
+                            mode="default",
+                        )
+                    )
+            finally:
+                bot_module.client = original_client
+                bot_module.cfg = original_cfg
+
+        return mock_client, mock_status
+
+    def test_runtime_error_sends_new_message(self):
+        """RuntimeError in pipeline sends a new message (not edit)."""
+        mock_client, mock_status = self._run_pipeline_with_error(
+            RuntimeError("gallery-dl failed")
+        )
+        send_calls = [str(c) for c in mock_client.send_message.call_args_list]
+        self.assertTrue(
+            any("Error" in c for c in send_calls),
+            f"Expected error in send_message calls: {send_calls}",
+        )
+
+    def test_runtime_error_deletes_status_message(self):
+        """RuntimeError in pipeline deletes the status message."""
+        _, mock_status = self._run_pipeline_with_error(
+            RuntimeError("gallery-dl failed")
+        )
+        mock_status.delete.assert_awaited_once()
+
+    def test_generic_error_sends_new_message(self):
+        """Unexpected exception in pipeline sends a new message."""
+        mock_client, _ = self._run_pipeline_with_error(
+            ValueError("something unexpected")
+        )
+        send_calls = [str(c) for c in mock_client.send_message.call_args_list]
+        self.assertTrue(
+            any("error" in c.lower() or "Error" in c for c in send_calls),
+            f"Expected error in send_message calls: {send_calls}",
+        )
+
+    def test_generic_error_deletes_status_message(self):
+        """Unexpected exception in pipeline deletes the status message."""
+        _, mock_status = self._run_pipeline_with_error(
+            ValueError("something unexpected")
+        )
+        mock_status.delete.assert_awaited_once()
 
 
 if __name__ == "__main__":

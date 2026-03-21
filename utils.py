@@ -93,6 +93,31 @@ async def safe_edit_message(
             logger.warning("Failed to edit message: %s", exc)
 
 
+def format_status_message(
+    url: str, job_id: int, mode: str, progress_content: str
+) -> str:
+    """Build the standard status message shown during download/upload.
+
+    Args:
+        url:              The source URL being processed.
+        job_id:           Unique job identifier.
+        mode:             ``"default"`` or ``"duplex"``.
+        progress_content: The current progress text to embed.
+
+    Returns:
+        A formatted Telegram-markdown string with link, job ID, mode, progress,
+        and a cancel hint.
+    """
+    mode_label = "Duplex" if mode == "duplex" else "Default"
+    return (
+        f"🔗 **Link:** `{url}`\n"
+        f"**Job ID:** `{job_id}`\n"
+        f"**Mode:** {mode_label}\n\n"
+        f"**Progress:**\n{progress_content}\n\n"
+        f"Cancel: `/cancel {job_id}`"
+    )
+
+
 def cleanup_directory(path: Optional[str]) -> None:
     """Remove *path* and all its contents, ignoring errors.
 
