@@ -44,6 +44,22 @@ def format_size(num_bytes: int) -> str:
     return f"{num_bytes:.2f} TB"
 
 
+def format_speed(bytes_per_sec: float) -> str:
+    """Human-readable transfer speed string (e.g. ``1.23 MB/s``).
+
+    Args:
+        bytes_per_sec: Transfer rate in bytes per second.  Values ≤ 0 are
+                       treated as unknown and return ``"? B/s"``.
+    """
+    if bytes_per_sec <= 0:
+        return "? B/s"
+    for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
+        if bytes_per_sec < 1024.0:
+            return f"{bytes_per_sec:.2f} {unit}"
+        bytes_per_sec /= 1024.0
+    return f"{bytes_per_sec:.2f} TB/s"
+
+
 async def safe_edit_message(
     message: object,
     text: str,

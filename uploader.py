@@ -13,7 +13,7 @@ import time
 from typing import List, Optional
 
 from task_manager import UserTask
-from utils import format_progress_bar, format_size, safe_edit_message, EDIT_THROTTLE_SECONDS
+from utils import format_progress_bar, format_size, format_speed, safe_edit_message, EDIT_THROTTLE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +141,8 @@ async def upload_files(
 
         # Build a progress callback bound to this chunk.
         last_edit: list = [0.0]
+        # Speed tracking: [prev_bytes, prev_monotonic_time]
+        speed_state: list = [0, time.monotonic()]
 
         single_file = len(chunk) == 1
 
@@ -149,10 +151,20 @@ async def upload_files(
             if ut.cancel_flag:
                 raise CancelUploadException("Upload cancelled mid-transfer.")
 
+            now = time.monotonic()
+            elapsed = now - speed_state[1]
+            if elapsed > 0:
+                speed = (current - speed_state[0]) / elapsed
+            else:
+                speed = 0.0
+            speed_state[0] = current
+            speed_state[1] = now
+
             bar = format_progress_bar(current, total)
             size_info = f"{format_size(current)} / {format_size(total)}"
+            speed_info = format_speed(speed)
             prefix = f"📤 Uploading {chunk_label}\n" if chunk_label else "📤 Uploading\n"
-            text = f"{prefix}{bar}\n{size_info}"
+            text = f"{prefix}{bar}\n{size_info} • {speed_info}"
 
             await safe_edit_message(status_message, text, last_edit)
 

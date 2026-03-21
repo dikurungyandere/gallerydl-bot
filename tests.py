@@ -421,6 +421,32 @@ class TestUtils(unittest.TestCase):
         result = format_size(5 * 1024 * 1024)
         self.assertIn("MB", result)
 
+    def test_format_speed_zero(self):
+        from utils import format_speed
+        result = format_speed(0)
+        self.assertIn("?", result)
+
+    def test_format_speed_negative(self):
+        from utils import format_speed
+        result = format_speed(-1)
+        self.assertIn("?", result)
+
+    def test_format_speed_bytes_per_sec(self):
+        from utils import format_speed
+        result = format_speed(500)
+        self.assertIn("B/s", result)
+        self.assertNotIn("KB/s", result)
+
+    def test_format_speed_kbps(self):
+        from utils import format_speed
+        result = format_speed(512 * 1024)  # 512 KB/s
+        self.assertIn("KB/s", result)
+
+    def test_format_speed_mbps(self):
+        from utils import format_speed
+        result = format_speed(5 * 1024 * 1024)  # 5 MB/s
+        self.assertIn("MB/s", result)
+
     def test_cleanup_directory_removes_dir(self):
         from utils import cleanup_directory
         d = tempfile.mkdtemp()

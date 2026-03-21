@@ -30,7 +30,7 @@ from config import Config, load_config
 from downloader import URL_RE, TARGET_RE, run_gallery_dl
 from task_manager import UserTask, task_manager
 from uploader import upload_files
-from utils import cleanup_directory, safe_edit_message
+from utils import cleanup_directory, format_speed, safe_edit_message
 from webui import collect_stats, format_uptime
 
 logging.basicConfig(
@@ -310,16 +310,28 @@ async def _pipeline(
         # ----------------------------------------------------------------
         n_downloaded = 0
         uploaded_paths: set = set()
+        dl_start_time = time.monotonic()
+        dl_total_bytes = 0
 
         async def on_file(path: str) -> None:
             """Called by run_gallery_dl for each file as it is downloaded."""
-            nonlocal n_downloaded
+            nonlocal n_downloaded, dl_total_bytes
             n_downloaded += 1
             if ut.cancel_flag:
                 return
+
+            # Accumulate file sizes to compute average download throughput.
+            try:
+                dl_total_bytes += os.path.getsize(path)
+            except OSError:
+                pass
+            elapsed = time.monotonic() - dl_start_time
+            speed = dl_total_bytes / elapsed if elapsed > 0 else 0.0
+            speed_str = format_speed(speed)
+
             await safe_edit_message(
                 status_message,
-                f"📥 Downloaded file {n_downloaded}, uploading… (job #{job_id})",
+                f"📥 Downloaded file {n_downloaded} ({speed_str}), uploading… (job #{job_id})",
                 last_edit,
             )
             await upload_files(
