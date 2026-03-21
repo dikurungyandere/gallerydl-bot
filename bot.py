@@ -281,8 +281,7 @@ async def url_handler(client, message) -> None:
     ut.status_message = status_message
 
     # Wrap the pipeline in a task so we can cancel it.
-    loop = asyncio.get_event_loop()
-    task = loop.create_task(
+    task = asyncio.create_task(
         _pipeline(job_id, ut, url, temp_dir, target_chat_id, status_message)
     )
     ut.task = task
