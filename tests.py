@@ -6,6 +6,8 @@ config.py, task_manager.py, utils.py, downloader.py, and uploader.py.
 """
 
 import asyncio
+import base64
+import json
 import os
 import tempfile
 import time
@@ -100,6 +102,97 @@ class TestConfig(unittest.TestCase):
             cfg = load_config()
         self.assertEqual(cfg.allowed_users, set())
 
+    def test_gallery_dl_config_b64_writes_temp_file(self):
+        """GALLERY_DL_CONFIG_B64 should be decoded and written to a temp file."""
+        raw_json = '{"extractor": {"base-directory": "/tmp"}}'
+        b64_value = base64.b64encode(raw_json.encode()).decode()
+        env = {
+            "API_ID": "1",
+            "API_HASH": "h",
+            "BOT_TOKEN": "t",
+            "GALLERY_DL_CONFIG_B64": b64_value,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        try:
+            self.assertIsNotNone(cfg.gallery_dl_config_path)
+            self.assertTrue(os.path.exists(cfg.gallery_dl_config_path))
+            with open(cfg.gallery_dl_config_path) as f:
+                data = json.load(f)
+            self.assertEqual(data["extractor"]["base-directory"], "/tmp")
+        finally:
+            cfg.cleanup()
+
+    def test_gallery_dl_config_b64_invalid_base64_raises(self):
+        env = {
+            "API_ID": "1",
+            "API_HASH": "h",
+            "BOT_TOKEN": "t",
+            "GALLERY_DL_CONFIG_B64": "!!!not-base64!!!",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            with self.assertRaises(ValueError):
+                load_config()
+
+    def test_gallery_dl_config_b64_invalid_json_raises(self):
+        """Valid base64 but the decoded content is not JSON → ValueError."""
+        b64_value = base64.b64encode(b"not-json-at-all").decode()
+        env = {
+            "API_ID": "1",
+            "API_HASH": "h",
+            "BOT_TOKEN": "t",
+            "GALLERY_DL_CONFIG_B64": b64_value,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            with self.assertRaises(ValueError):
+                load_config()
+
+    def test_b64_takes_priority_over_json(self):
+        """GALLERY_DL_CONFIG_B64 is preferred over GALLERY_DL_CONFIG_JSON."""
+        b64_json = '{"source": "b64"}'
+        b64_value = base64.b64encode(b64_json.encode()).decode()
+        env = {
+            "API_ID": "1",
+            "API_HASH": "h",
+            "BOT_TOKEN": "t",
+            "GALLERY_DL_CONFIG_B64": b64_value,
+            "GALLERY_DL_CONFIG_JSON": '{"source": "json"}',
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        try:
+            with open(cfg.gallery_dl_config_path) as f:
+                data = json.load(f)
+            self.assertEqual(data["source"], "b64")
+        finally:
+            cfg.cleanup()
+
+    def test_explicit_path_takes_priority_over_b64(self):
+        """GALLERY_DL_CONFIG_PATH overrides GALLERY_DL_CONFIG_B64."""
+        b64_value = base64.b64encode(b'{"source":"b64"}').decode()
+        with tempfile.NamedTemporaryFile(suffix=".conf", delete=False) as f:
+            explicit_path = f.name
+        try:
+            env = {
+                "API_ID": "1",
+                "API_HASH": "h",
+                "BOT_TOKEN": "t",
+                "GALLERY_DL_CONFIG_PATH": explicit_path,
+                "GALLERY_DL_CONFIG_B64": b64_value,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                from config import load_config
+                cfg = load_config()
+            self.assertEqual(cfg.gallery_dl_config_path, explicit_path)
+            # No temp file should have been created.
+            self.assertIsNone(cfg._temp_config_file)
+        finally:
+            os.unlink(explicit_path)
+
 
 # ---------------------------------------------------------------------------
 # task_manager.py tests
@@ -109,47 +202,112 @@ class TestTaskManager(unittest.TestCase):
     """Tests for TaskManager."""
 
     def setUp(self):
-        # Import fresh to avoid cross-test state pollution via the module singleton.
         from task_manager import TaskManager
         self.tm = TaskManager()
 
-    def test_get_or_create_and_remove(self):
-        ut = self.tm.get_or_create(1)
-        self.assertIsNotNone(ut)
-        self.assertFalse(ut.cancel_flag)
-        self.tm.remove(1)
-        self.assertIsNone(self.tm.get(1))
+    def test_create_returns_incrementing_ids(self):
+        jid1, ut1 = self.tm.create(1)
+        jid2, ut2 = self.tm.create(1)
+        self.assertNotEqual(jid1, jid2)
+        self.assertLess(jid1, jid2)
+        self.assertEqual(ut1.user_id, 1)
+        self.assertEqual(ut2.user_id, 1)
+
+    def test_get_returns_task_by_job_id(self):
+        jid, ut = self.tm.create(1)
+        self.assertIs(self.tm.get(jid), ut)
+
+    def test_get_nonexistent_returns_none(self):
+        self.assertIsNone(self.tm.get(9999))
+
+    def test_remove_cleans_up(self):
+        jid, _ = self.tm.create(2)
+        self.tm.remove(jid)
+        self.assertIsNone(self.tm.get(jid))
+
+    def test_remove_nonexistent_is_safe(self):
+        # Should not raise.
+        self.tm.remove(9999)
 
     def test_is_active_no_task(self):
-        self.tm.get_or_create(2)
-        self.assertFalse(self.tm.is_active(2))
+        self.tm.create(3)
+        self.assertFalse(self.tm.is_active(3))
 
     def test_is_active_with_running_task(self):
-        ut = self.tm.get_or_create(3)
+        jid, ut = self.tm.create(4)
 
         async def _run():
             task = asyncio.create_task(asyncio.sleep(100))
             ut.task = task
-            is_active = self.tm.is_active(3)
+            active = self.tm.is_active(4)
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            return is_active
+            return active
 
         result = asyncio.run(_run())
         self.assertTrue(result)
 
-    def test_cancel_sets_flag(self):
-        ut = self.tm.get_or_create(4)
+    def test_multiple_jobs_per_user(self):
+        jid1, ut1 = self.tm.create(5)
+        jid2, ut2 = self.tm.create(5)
 
-        async def _test():
-            return await self.tm.cancel(4)
+        async def _run():
+            t1 = asyncio.create_task(asyncio.sleep(100))
+            t2 = asyncio.create_task(asyncio.sleep(100))
+            ut1.task = t1
+            ut2.task = t2
+            jobs = self.tm.get_user_tasks(5)
+            t1.cancel()
+            t2.cancel()
+            for t in (t1, t2):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+            return jobs
 
-        result = asyncio.run(_test())
-        self.assertTrue(result)
-        self.assertTrue(ut.cancel_flag)
+        jobs = asyncio.run(_run())
+        self.assertEqual(len(jobs), 2)
+        job_ids = {j[0] for j in jobs}
+        self.assertIn(jid1, job_ids)
+        self.assertIn(jid2, job_ids)
+
+    def test_cancel_specific_job(self):
+        jid1, ut1 = self.tm.create(6)
+        jid2, ut2 = self.tm.create(6)
+
+        async def _run():
+            t1 = asyncio.create_task(asyncio.sleep(100))
+            t2 = asyncio.create_task(asyncio.sleep(100))
+            ut1.task = t1
+            ut2.task = t2
+            cancelled = await self.tm.cancel(jid1)
+            return cancelled, ut1.cancel_flag, ut2.cancel_flag
+
+        cancelled, flag1, flag2 = asyncio.run(_run())
+        self.assertTrue(cancelled)
+        self.assertTrue(flag1)
+        self.assertFalse(flag2)
+
+    def test_cancel_all(self):
+        jid1, ut1 = self.tm.create(7)
+        jid2, ut2 = self.tm.create(7)
+
+        async def _run():
+            t1 = asyncio.create_task(asyncio.sleep(100))
+            t2 = asyncio.create_task(asyncio.sleep(100))
+            ut1.task = t1
+            ut2.task = t2
+            count = await self.tm.cancel_all(7)
+            return count, ut1.cancel_flag, ut2.cancel_flag
+
+        count, flag1, flag2 = asyncio.run(_run())
+        self.assertEqual(count, 2)
+        self.assertTrue(flag1)
+        self.assertTrue(flag2)
 
     def test_cancel_nonexistent_returns_false(self):
         async def _test():
@@ -157,6 +315,34 @@ class TestTaskManager(unittest.TestCase):
 
         result = asyncio.run(_test())
         self.assertFalse(result)
+
+    def test_cancel_all_no_jobs_returns_zero(self):
+        async def _test():
+            return await self.tm.cancel_all(9999)
+
+        result = asyncio.run(_test())
+        self.assertEqual(result, 0)
+
+    def test_remove_updates_user_job_list(self):
+        jid1, _ = self.tm.create(8)
+        jid2, ut2 = self.tm.create(8)
+
+        async def _run():
+            t = asyncio.create_task(asyncio.sleep(100))
+            ut2.task = t
+            self.tm.remove(jid1)
+            jobs = self.tm.get_user_tasks(8)
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+            return jobs
+
+        jobs = asyncio.run(_run())
+        job_ids = [j[0] for j in jobs]
+        self.assertNotIn(jid1, job_ids)
+        self.assertIn(jid2, job_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +450,32 @@ class TestUploader(unittest.TestCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0], ["a.jpg"])
 
+    def test_upload_uses_target_chat_id(self):
+        """upload_files must send to target_chat_id, not event.chat_id."""
+        from uploader import upload_files
+        from task_manager import UserTask
+
+        mock_client = MagicMock()
+        mock_client.send_file = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        asyncio.run(
+            upload_files(
+                client=mock_client,
+                target_chat_id=target,
+                ut=ut,
+                files=["/tmp/fake.jpg"],
+                status_message=mock_status,
+            )
+        )
+
+        mock_client.send_file.assert_called_once()
+        call_args = mock_client.send_file.call_args
+        self.assertEqual(call_args[0][0], target)
+
 
 # ---------------------------------------------------------------------------
 # downloader.py tests
@@ -281,6 +493,23 @@ class TestDownloader(unittest.TestCase):
     def test_url_regex_no_match(self):
         from downloader import URL_RE
         m = URL_RE.search("no url here")
+        self.assertIsNone(m)
+
+    def test_target_regex_username(self):
+        from downloader import TARGET_RE
+        m = TARGET_RE.search("https://example.com/gallery -> @mychannel")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "@mychannel")
+
+    def test_target_regex_numeric_id(self):
+        from downloader import TARGET_RE
+        m = TARGET_RE.search("https://example.com -> -100123456789")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "-100123456789")
+
+    def test_target_regex_no_target(self):
+        from downloader import TARGET_RE
+        m = TARGET_RE.search("https://example.com/gallery")
         self.assertIsNone(m)
 
     def test_build_gallery_dl_cmd_basic(self):

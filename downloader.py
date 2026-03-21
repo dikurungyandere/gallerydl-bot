@@ -11,12 +11,16 @@ import os
 import re
 from typing import Callable, Awaitable, List, Optional
 
-from task_manager import UserTask, task_manager
+from task_manager import UserTask
 
 logger = logging.getLogger(__name__)
 
 # Regex to detect URLs in messages.
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+# Regex to detect an optional forwarding target at the end of a message:
+#   "-> @username"  or  "-> -100123456789"
+TARGET_RE = re.compile(r"\s*->\s*(\S+)\s*$")
 
 
 def _build_gallery_dl_cmd(
@@ -39,7 +43,7 @@ def _build_gallery_dl_cmd(
 
 
 async def run_gallery_dl(
-    user_id: int,
+    ut: UserTask,
     url: str,
     temp_dir: str,
     config_path: Optional[str],
@@ -51,7 +55,8 @@ async def run_gallery_dl(
     or even days. Use /cancel to stop an in-progress download at any time.
 
     Args:
-        user_id:     Telegram user ID (used to check cancel_flag and store process).
+        ut:          The :class:`~task_manager.UserTask` for this job (used to
+                     check ``cancel_flag`` and store the subprocess handle).
         url:         URL to download.
         temp_dir:    Directory where gallery-dl writes files.
         config_path: Optional path to gallery-dl config file.
@@ -67,8 +72,6 @@ async def run_gallery_dl(
     """
     cmd = _build_gallery_dl_cmd(url, temp_dir, config_path)
     logger.info("Running: %s", " ".join(cmd))
-
-    ut: UserTask = task_manager.get_or_create(user_id)
 
     process = await asyncio.create_subprocess_exec(
         *cmd,

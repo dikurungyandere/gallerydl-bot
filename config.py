@@ -5,6 +5,7 @@ AI-GENERATED CODE DISCLAIMER: This entire codebase has been created by AI.
 Review it carefully before deploying to production.
 """
 
+import base64
 import json
 import os
 import tempfile
@@ -26,7 +27,8 @@ class Config:
     allowed_users: Set[int]
     gallery_dl_config_path: Optional[str]
 
-    # Path to a temporary file written from GALLERY_DL_CONFIG_JSON, if used.
+    # Path to a temporary file written from GALLERY_DL_CONFIG_B64 or
+    # GALLERY_DL_CONFIG_JSON, if used.
     _temp_config_file: Optional[str] = field(default=None, repr=False)
 
     def cleanup(self) -> None:
@@ -36,8 +38,21 @@ class Config:
             self._temp_config_file = None
 
 
+def _write_temp_config(parsed: object) -> str:
+    """Serialise *parsed* as JSON into a temporary file and return its path."""
+    fd, temp_path = tempfile.mkstemp(suffix=".conf", prefix="gallerydl_")
+    with os.fdopen(fd, "w") as f:
+        json.dump(parsed, f)
+    return temp_path
+
+
 def load_config() -> Config:
     """Load and validate configuration from environment variables.
+
+    gallery-dl config resolution order (first match wins):
+    1. ``GALLERY_DL_CONFIG_PATH`` – path to an existing config file.
+    2. ``GALLERY_DL_CONFIG_B64``  – base64-encoded JSON config string.
+    3. ``GALLERY_DL_CONFIG_JSON`` – raw JSON config string (legacy).
 
     Returns a populated :class:`Config` instance.
 
@@ -74,24 +89,41 @@ def load_config() -> Config:
                         f"ALLOWED_USERS contains a non-integer value: {part!r}"
                     )
 
-    # gallery-dl config: prefer an explicit file path, fall back to JSON env var.
+    # gallery-dl config: prefer an explicit file path, then base64, then JSON.
     gallery_dl_config_path = os.getenv("GALLERY_DL_CONFIG_PATH", "").strip() or None
     temp_config_file: Optional[str] = None
 
-    gallery_dl_config_json = os.getenv("GALLERY_DL_CONFIG_JSON", "").strip()
-    if gallery_dl_config_json and not gallery_dl_config_path:
-        try:
-            parsed = json.loads(gallery_dl_config_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"GALLERY_DL_CONFIG_JSON is not valid JSON: {exc}"
-            ) from exc
+    if not gallery_dl_config_path:
+        # Try GALLERY_DL_CONFIG_B64 (preferred: base64-encoded JSON).
+        raw_b64 = os.getenv("GALLERY_DL_CONFIG_B64", "").strip()
+        if raw_b64:
+            try:
+                decoded = base64.b64decode(raw_b64).decode("utf-8")
+            except Exception as exc:
+                raise ValueError(
+                    f"GALLERY_DL_CONFIG_B64 is not valid base64: {exc}"
+                ) from exc
+            try:
+                parsed = json.loads(decoded)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"GALLERY_DL_CONFIG_B64 decoded to invalid JSON: {exc}"
+                ) from exc
+            temp_config_file = _write_temp_config(parsed)
+            gallery_dl_config_path = temp_config_file
 
-        fd, temp_path = tempfile.mkstemp(suffix=".conf", prefix="gallerydl_")
-        with os.fdopen(fd, "w") as f:
-            json.dump(parsed, f)
-        gallery_dl_config_path = temp_path
-        temp_config_file = temp_path
+    if not gallery_dl_config_path:
+        # Fall back to GALLERY_DL_CONFIG_JSON (legacy raw JSON).
+        gallery_dl_config_json = os.getenv("GALLERY_DL_CONFIG_JSON", "").strip()
+        if gallery_dl_config_json:
+            try:
+                parsed = json.loads(gallery_dl_config_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"GALLERY_DL_CONFIG_JSON is not valid JSON: {exc}"
+                ) from exc
+            temp_config_file = _write_temp_config(parsed)
+            gallery_dl_config_path = temp_config_file
 
     cfg = Config(
         api_id=api_id,

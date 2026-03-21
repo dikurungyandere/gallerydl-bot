@@ -16,13 +16,13 @@ import logging
 import os
 import tempfile
 import time
-from typing import Optional
+from typing import Optional, Union
 
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 
 from config import Config, load_config
-from downloader import URL_RE, run_gallery_dl
+from downloader import URL_RE, TARGET_RE, run_gallery_dl
 from task_manager import UserTask, task_manager
 from uploader import upload_files
 from utils import cleanup_directory, safe_edit_message
@@ -63,10 +63,16 @@ START_TEXT = (
     "👋 **gallerydl-bot**\n\n"
     "Send me any URL supported by [gallery-dl](https://github.com/mikf/gallery-dl) "
     "and I will download the media and send it back to you.\n\n"
+    "You can run **multiple downloads at once** — just send another URL while one is "
+    "already in progress.\n\n"
+    "To forward files to a specific channel or group, append `-> @username` or "
+    "`-> -100xxxxxxxxxx` after the URL:\n"
+    "`https://example.com/gallery -> @mychannel`\n\n"
     "Commands:\n"
     "• /start — Show this message\n"
     "• /help  — Show usage instructions\n"
-    "• /cancel — Cancel your current download/upload\n\n"
+    "• /cancel — Cancel **all** your active downloads/uploads\n"
+    "• /cancel `<job_id>` — Cancel a specific job (ID shown in the status message)\n\n"
     "_⚠️ This bot was created by AI. Use at your own risk._"
 )
 
@@ -74,13 +80,21 @@ HELP_TEXT = (
     "📖 **How to use gallerydl-bot**\n\n"
     "1. Send a URL (e.g. an Instagram post, a Twitter/X post, a Reddit gallery…).\n"
     "2. The bot will download the media using `gallery-dl`.\n"
-    "3. All downloaded files are uploaded back to you via Telegram.\n\n"
+    "3. All downloaded files are uploaded back to you (or a target chat) via Telegram.\n\n"
+    "**Parallel downloads**\n"
+    "You can send multiple URLs without waiting — each one starts a separate job. "
+    "The status message for each job shows its job ID.\n\n"
+    "**Custom destination**\n"
+    "Append `-> @channel` or `-> -100xxxxxxxxxx` after the URL to forward files "
+    "to a specific channel or group instead of this chat.\n"
+    "Example: `https://example.com/post -> @myarchivechannel`\n\n"
     "**Limits**\n"
     "• Albums are split into chunks of 10 (Telegram limit).\n"
     "• Maximum upload size is ~2 GB per file (MTProto).\n"
     "• Only URLs listed in `gallery-dl`'s supported sites work.\n\n"
     "**Commands**\n"
-    "• /cancel — Stop an active download or upload at any time.\n\n"
+    "• /cancel — Stop **all** active downloads/uploads.\n"
+    "• /cancel `<job_id>` — Stop a specific job.\n\n"
     "_⚠️ This bot was created by AI. Review the source before trusting it._"
 )
 
@@ -103,27 +117,68 @@ async def help_handler(event) -> None:
 
 @require_allowed
 async def cancel_handler(event) -> None:
-    """Handle the /cancel command."""
-    user_id: int = event.sender_id
+    """Handle the /cancel [job_id] command.
 
-    if not task_manager.is_active(user_id):
-        await event.respond("ℹ️ You have no active download or upload to cancel.")
+    With no argument: cancel all active jobs for this user.
+    With a numeric job_id: cancel only that specific job.
+    """
+    user_id: int = event.sender_id
+    text: str = event.raw_text or ""
+
+    # Check for an optional numeric job_id argument.
+    parts = text.strip().split(None, 1)
+    job_id_arg: Optional[int] = None
+    if len(parts) == 2:
+        try:
+            job_id_arg = int(parts[1])
+        except ValueError:
+            await event.respond(
+                "⚠️ Invalid job ID. Use /cancel to stop all jobs, "
+                "or /cancel <job_id> for a specific one."
+            )
+            return
+
+    active_jobs = task_manager.get_user_tasks(user_id)
+
+    if not active_jobs:
+        await event.respond("ℹ️ You have no active downloads or uploads to cancel.")
         return
 
-    ut = task_manager.get(user_id)
-    status_msg = ut.status_message if ut else None
+    if job_id_arg is not None:
+        # Cancel a specific job.
+        ut = task_manager.get(job_id_arg)
+        if ut is None or ut.user_id != user_id:
+            await event.respond(f"ℹ️ No active job #{job_id_arg} found.")
+            return
 
-    cancelled = await task_manager.cancel(user_id)
-    if cancelled:
-        if status_msg is not None:
-            try:
-                await status_msg.edit("❌ Operation Cancelled by User")
-            except Exception:
-                pass
+        status_msg = ut.status_message
+        cancelled = await task_manager.cancel(job_id_arg)
+        if cancelled:
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(f"❌ Job #{job_id_arg} cancelled by user.")
+                except Exception:
+                    pass
+            else:
+                await event.respond(f"❌ Job #{job_id_arg} cancelled by user.")
         else:
-            await event.respond("❌ Operation Cancelled by User")
+            await event.respond(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
     else:
-        await event.respond("ℹ️ Nothing to cancel.")
+        # Cancel all jobs for this user.
+        # Edit each status message before cancelling so the user sees which
+        # jobs were stopped.
+        for jid, ut in active_jobs:
+            if ut.status_message is not None:
+                try:
+                    await ut.status_message.edit(f"❌ Job #{jid} cancelled by user.")
+                except Exception:
+                    pass
+
+        count = await task_manager.cancel_all(user_id)
+        if count:
+            await event.respond(f"❌ Cancelled {count} active job(s).")
+        else:
+            await event.respond("ℹ️ Nothing to cancel.")
 
 
 # ---------------------------------------------------------------------------
@@ -132,50 +187,67 @@ async def cancel_handler(event) -> None:
 
 @require_allowed
 async def url_handler(event) -> None:
-    """Handle incoming messages that contain a URL."""
+    """Handle incoming messages that contain a URL.
+
+    Supports an optional forwarding target after the URL:
+        https://example.com/gallery -> @mychannel
+        https://example.com/gallery -> -100123456789
+    """
     user_id: int = event.sender_id
     text: str = event.raw_text or ""
 
-    match = URL_RE.search(text)
+    # Strip the optional "-> target" suffix before URL matching.
+    target_str: Optional[str] = None
+    target_match = TARGET_RE.search(text)
+    if target_match:
+        target_str = target_match.group(1)
+        text_for_url = text[: target_match.start()]
+    else:
+        text_for_url = text
+
+    match = URL_RE.search(text_for_url)
     if not match:
         return
     url: str = match.group(0)
 
-    if task_manager.is_active(user_id):
-        await event.respond(
-            "⚠️ You already have an active download. Use /cancel to stop it first."
-        )
-        return
+    # Resolve the target chat: numeric ID or username.
+    target_chat_id: Union[int, str, None]
+    if target_str is None:
+        target_chat_id = event.chat_id  # type: ignore[attr-defined]
+    elif target_str.lstrip("-").isdigit():
+        target_chat_id = int(target_str)
+    else:
+        target_chat_id = target_str  # Telethon accepts "@username" strings
 
-    # Register the task slot.
-    ut: UserTask = task_manager.get_or_create(user_id)
+    # Create a new job slot — no limit on concurrent jobs.
+    job_id, ut = task_manager.create(user_id)
     ut.cancel_flag = False
 
     # Create a unique temp directory for this request.
-    temp_dir = tempfile.mkdtemp(prefix=f"gdlbot_{user_id}_")
+    temp_dir = tempfile.mkdtemp(prefix=f"gdlbot_{user_id}_{job_id}_")
     ut.temp_dir = temp_dir
 
-    # Send initial status message.
-    status_message = await event.respond("⏳ Starting download…")
+    # Send initial status message (includes the job ID for reference).
+    status_message = await event.respond(f"⏳ Starting download… (job #{job_id})")
     ut.status_message = status_message
 
     # Wrap the pipeline in a task so we can cancel it.
     loop = asyncio.get_event_loop()
     task = loop.create_task(
-        _pipeline(user_id, url, temp_dir, status_message, event)
+        _pipeline(job_id, ut, url, temp_dir, target_chat_id, status_message)
     )
     ut.task = task
 
 
 async def _pipeline(
-    user_id: int,
+    job_id: int,
+    ut: UserTask,
     url: str,
     temp_dir: str,
+    target_chat_id: Union[int, str],
     status_message,
-    event,
 ) -> None:
-    """Run the full download → upload pipeline for a single user request."""
-    ut = task_manager.get(user_id)
+    """Run the full download → upload pipeline for a single job."""
     last_edit: list = [0.0]
 
     try:
@@ -188,20 +260,20 @@ async def _pipeline(
             file_count_ref[0] = n_files
             await safe_edit_message(
                 status_message,
-                f"📥 Downloading… {n_files} file(s) so far.",
+                f"📥 Downloading… {n_files} file(s) so far. (job #{job_id})",
                 last_edit,
             )
 
         config_path = cfg.gallery_dl_config_path if cfg else None
         files = await run_gallery_dl(
-            user_id=user_id,
+            ut=ut,
             url=url,
             temp_dir=temp_dir,
             config_path=config_path,
             on_progress=on_download_progress,
         )
 
-        if ut and ut.cancel_flag:
+        if ut.cancel_flag:
             return
 
         if not files:
@@ -221,29 +293,29 @@ async def _pipeline(
         # ----------------------------------------------------------------
         await safe_edit_message(
             status_message,
-            f"✅ Downloaded {len(files)} file(s). Starting upload…",
+            f"✅ Downloaded {len(files)} file(s). Starting upload… (job #{job_id})",
             last_edit,
             force=True,
         )
 
         await upload_files(
             client=client,
-            event=event,
+            target_chat_id=target_chat_id,
             ut=ut,
             files=files,
             status_message=status_message,
         )
 
     except asyncio.CancelledError:
-        logger.info("Pipeline cancelled for user %s.", user_id)
+        logger.info("Pipeline cancelled for job #%s.", job_id)
         try:
-            await status_message.edit("❌ Operation Cancelled by User")
+            await status_message.edit(f"❌ Job #{job_id} cancelled by user.")
         except Exception:
             pass
 
     except FloodWaitError as exc:
         wait = exc.seconds
-        logger.warning("FloodWaitError for user %s. Waiting %s s.", user_id, wait)
+        logger.warning("FloodWaitError for job #%s. Waiting %s s.", job_id, wait)
         try:
             await status_message.edit(
                 f"⚠️ Telegram rate limit hit. Please wait {wait} seconds and try again."
@@ -253,14 +325,14 @@ async def _pipeline(
         await asyncio.sleep(wait)
 
     except RuntimeError as exc:
-        logger.error("Pipeline error for user %s: %s", user_id, exc)
+        logger.error("Pipeline error for job #%s: %s", job_id, exc)
         try:
             await status_message.edit(f"❌ Error: {exc}")
         except Exception:
             pass
 
     except Exception as exc:
-        logger.exception("Unexpected error for user %s: %s", user_id, exc)
+        logger.exception("Unexpected error for job #%s: %s", job_id, exc)
         try:
             await status_message.edit(f"❌ Unexpected error: {exc}")
         except Exception:
@@ -271,8 +343,8 @@ async def _pipeline(
         # Step 3: Cleanup (always runs)
         # ----------------------------------------------------------------
         cleanup_directory(temp_dir)
-        task_manager.remove(user_id)
-        logger.info("Cleanup complete for user %s.", user_id)
+        task_manager.remove(job_id)
+        logger.info("Cleanup complete for job #%s.", job_id)
 
 
 # ---------------------------------------------------------------------------

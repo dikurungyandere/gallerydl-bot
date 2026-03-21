@@ -8,7 +8,7 @@ Review it carefully before deploying to production.
 import asyncio
 import logging
 import time
-from typing import List
+from typing import List, Optional
 
 from task_manager import UserTask
 from utils import format_progress_bar, format_size, safe_edit_message, EDIT_THROTTLE_SECONDS
@@ -38,17 +38,19 @@ def chunk_files(files: List[str], size: int = ALBUM_CHUNK_SIZE) -> List[List[str
 
 async def upload_files(
     client: object,
-    event: object,
+    target_chat_id: object,
     ut: UserTask,
     files: List[str],
     status_message: object,
 ) -> None:
-    """Upload all *files* back to the user, respecting Telegram's album limit.
+    """Upload all *files* to *target_chat_id*, respecting Telegram's album limit.
 
     Args:
         client:         Telethon ``TelegramClient`` instance.
-        event:          The original Telethon event (used for ``chat_id``).
-        ut:             The :class:`~task_manager.UserTask` for this user.
+        target_chat_id: The Telegram chat/channel/group to send files to.
+                        Can be an integer ID, a ``@username`` string, or any
+                        entity accepted by Telethon's ``send_file``.
+        ut:             The :class:`~task_manager.UserTask` for this job.
         files:          List of local file paths to upload.
         status_message: The status :class:`Message` to update with progress.
 
@@ -68,9 +70,6 @@ async def upload_files(
         # Build a progress callback bound to this chunk.
         last_edit: list = [0.0]
 
-        # We need to track overall bytes for a single-file upload, or item count
-        # for a multi-file album.  Telethon calls progress callbacks with
-        # (current_bytes, total_bytes) for individual files.
         single_file = len(chunk) == 1
 
         async def _progress_callback(current: int, total: int) -> None:
@@ -88,14 +87,14 @@ async def upload_files(
         try:
             if single_file:
                 await client.send_file(  # type: ignore[attr-defined]
-                    event.chat_id,  # type: ignore[attr-defined]
+                    target_chat_id,
                     chunk[0],
                     progress_callback=_progress_callback,
                 )
             else:
                 # For albums: Telethon accepts a list; progress is per-file.
                 await client.send_file(  # type: ignore[attr-defined]
-                    event.chat_id,  # type: ignore[attr-defined]
+                    target_chat_id,
                     chunk,
                     progress_callback=_progress_callback,
                 )
