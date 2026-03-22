@@ -9,6 +9,9 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 ## Features
 
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
+- 🎬 **yt-dlp integration** — enable `YTDL_ENABLED=true` (or toggle per-job) to use yt-dlp for HLS/DASH streams and other video-hosting sites not natively covered by gallery-dl
+- 🎞️ **Pixiv Ugoira conversion** — enable `UGOIRA_CONVERT=true` (or toggle per-job) to convert Ugoira ZIP files to WebM/MP4 using FFmpeg
+- 📼 **Accurate Ugoira timecodes** — enable `UGOIRA_MKVMERGE=true` (or toggle per-job) to produce MKV files with per-frame accurate timecodes via mkvmerge
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
 - 🎛️ **Configuration menu** — after sending a URL an inline-keyboard menu lets you choose destination, upload mode, custom config, and custom args before the download begins
@@ -171,6 +174,9 @@ Copy `.env.example` to `.env` and fill in the values.
 | `GALLERY_DL_CONFIG_PATH` | — | Path to a `gallery-dl.conf` file on disk. |
 | `GALLERY_DL_CONFIG_B64` | — | gallery-dl config as a **base64-encoded** JSON string. Preferred over `GALLERY_DL_CONFIG_JSON` because it avoids shell quoting issues. Encode with: `base64 < gallery-dl.conf` |
 | `GALLERY_DL_CONFIG_JSON` | — | gallery-dl config as a raw JSON string (legacy). |
+| `YTDL_ENABLED` | `false` | Set to `true` to pass `--yt-dlp` to gallery-dl globally, enabling yt-dlp for HLS/DASH and other video streams. Requires `yt-dlp` (included in `requirements.txt`). Can also be toggled per-job in the menu. |
+| `UGOIRA_CONVERT` | `false` | Set to `true` to pass `--ugoira-conv` to gallery-dl globally, converting Pixiv Ugoira ZIP files to WebM/MP4 via FFmpeg. Requires `ffmpeg` (included in the Docker image). Can also be toggled per-job. |
+| `UGOIRA_MKVMERGE` | `false` | Set to `true` to pass `--ugoira-conv-mkvmerge` to gallery-dl globally, producing MKV files with accurate per-frame timecodes via mkvmerge. Requires `mkvtoolnix` (included in the Docker image). Can also be toggled per-job. |
 | `WEBUI` | `false` | Set to `true` to enable the HTTP status page. |
 | `WEBUI_HOST` | `0.0.0.0` | Interface the web server binds to. |
 | `WEBUI_PORT` | `8080` | Port the web server listens on. |
@@ -201,7 +207,8 @@ download starts:
 | 1 | **Current chat** ✓ (default) | **Custom chat** |
 | 2 | **Default** mode ✓ (default) | **Duplex** mode |
 | 3 | **⚙️ Custom Config** | **🔧 Custom Args** |
-| 4 | **▶ Run** | **✖ Cancel** |
+| 4 | **🎬 ytdl** | **🎞️ Ugoira** | **📼 MKV** |
+| 5 | **▶ Run** | **✖ Cancel** |
 
 Press **▶ Run** to start the job, or **✖ Cancel** to discard it.
 
@@ -294,7 +301,20 @@ Custom args: None
 Custom args: `--username myuser --password mypass`
 ```
 
-### Run / Cancel (row 4)
+### Media processing (row 4)
+
+| Button | Behaviour |
+|--------|-----------|
+| **🎬 ytdl** | Toggle yt-dlp integration for this job. When enabled (✓), passes `--yt-dlp` to gallery-dl so that HLS/DASH streams and other yt-dlp-handled URLs are downloaded. Defaults to the value of `YTDL_ENABLED`. |
+| **🎞️ Ugoira** | Toggle Pixiv Ugoira FFmpeg conversion for this job. When enabled (✓), passes `--ugoira-conv` to gallery-dl, converting Ugoira ZIP files to WebM/MP4. Requires FFmpeg. Defaults to the value of `UGOIRA_CONVERT`. |
+| **📼 MKV** | Toggle mkvmerge-based Ugoira conversion for this job. When enabled (✓), passes `--ugoira-conv-mkvmerge` to gallery-dl, producing MKV files with accurate per-frame timecodes. Requires mkvmerge. Defaults to the value of `UGOIRA_MKVMERGE`. |
+
+The menu text shows the current state of each toggle:
+```
+yt-dlp: Off | Ugoira conv: Off | MKV timecodes: Off
+```
+
+### Run / Cancel (row 5)
 
 | Button | Behaviour |
 |--------|-----------|

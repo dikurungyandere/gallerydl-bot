@@ -32,6 +32,18 @@ class Config:
     webui_host: str = "0.0.0.0"
     webui_port: int = 8080
 
+    # yt-dlp / youtube-dl integration: pass --yt-dlp to gallery-dl so that
+    # HLS/DASH streams (and other ytdl-handled URLs) are downloaded correctly.
+    ytdl_enabled: bool = False
+
+    # FFmpeg Pixiv Ugoira conversion: pass --ugoira-conv to gallery-dl so
+    # that Ugoira ZIP files are automatically converted to WebM/MP4.
+    ugoira_convert: bool = False
+
+    # mkvmerge Ugoira timecodes: pass --ugoira-conv-mkvmerge to gallery-dl so
+    # that Ugoira files are converted to MKV with accurate per-frame timecodes.
+    ugoira_mkvmerge: bool = False
+
     # Path to a temporary file written from GALLERY_DL_CONFIG_B64 or
     # GALLERY_DL_CONFIG_JSON, if used.
     _temp_config_file: Optional[str] = field(default=None, repr=False)
@@ -141,6 +153,11 @@ def load_config() -> Config:
             f"WEBUI_PORT must be an integer, got: {raw_webui_port!r}"
         )
 
+    # Optional media-processing flags passed to gallery-dl.
+    ytdl_enabled = os.getenv("YTDL_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+    ugoira_convert = os.getenv("UGOIRA_CONVERT", "false").strip().lower() in ("true", "1", "yes")
+    ugoira_mkvmerge = os.getenv("UGOIRA_MKVMERGE", "false").strip().lower() in ("true", "1", "yes")
+
     cfg = Config(
         api_id=api_id,
         api_hash=api_hash,
@@ -150,6 +167,9 @@ def load_config() -> Config:
         webui_enabled=webui_enabled,
         webui_host=webui_host,
         webui_port=webui_port,
+        ytdl_enabled=ytdl_enabled,
+        ugoira_convert=ugoira_convert,
+        ugoira_mkvmerge=ugoira_mkvmerge,
     )
     cfg._temp_config_file = temp_config_file
     return cfg

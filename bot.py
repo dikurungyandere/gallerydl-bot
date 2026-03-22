@@ -190,6 +190,12 @@ class PendingJob:
     awaiting_custom_config: bool = False
     # True while waiting for the user to reply with custom arguments.
     awaiting_custom_args: bool = False
+    # Enable yt-dlp integration for HLS/DASH video downloads.
+    ytdl: bool = False
+    # Convert Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+    ugoira_convert: bool = False
+    # Use mkvmerge for Ugoira conversion (accurate per-frame timecodes).
+    ugoira_mkvmerge: bool = False
 
 
 # pending_id (incrementing int) → PendingJob
@@ -212,18 +218,25 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
 
     config_status = "Applied" if pj.custom_config_path else "None"
     args_status = f"`{pj.custom_args}`" if pj.custom_args else "None"
+    ytdl_status = "On" if pj.ytdl else "Off"
+    ugoira_status = "On" if pj.ugoira_convert else "Off"
+    mkv_status = "On" if pj.ugoira_mkvmerge else "Off"
 
     text = (
         f"🔗 **Link:** `{pj.url}`\n\n"
         f"The downloaded files will be uploaded to {dest_label}.\n"
         f"**Custom config:** {config_status}\n"
-        f"**Custom args:** {args_status}"
+        f"**Custom args:** {args_status}\n"
+        f"**yt-dlp:** {ytdl_status} | **Ugoira conv:** {ugoira_status} | **MKV timecodes:** {mkv_status}"
     )
 
     c_check = " ✓" if pj.use_current_chat else ""
     cu_check = " ✓" if not pj.use_current_chat else ""
     md_check = " ✓" if pj.mode == "default" else ""
     mx_check = " ✓" if pj.mode == "duplex" else ""
+    ytdl_check = " ✓" if pj.ytdl else ""
+    ugo_check = " ✓" if pj.ugoira_convert else ""
+    mkv_check = " ✓" if pj.ugoira_mkvmerge else ""
 
     markup = InlineKeyboardMarkup(
         [
@@ -249,6 +262,17 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
                 InlineKeyboardButton(
                     "🔧 Custom Args", callback_data=f"gdl:arg:{pid}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    f"🎬 ytdl{ytdl_check}", callback_data=f"gdl:ytdl:{pid}"
+                ),
+                InlineKeyboardButton(
+                    f"🎞️ Ugoira{ugo_check}", callback_data=f"gdl:ugo:{pid}"
+                ),
+                InlineKeyboardButton(
+                    f"📼 MKV{mkv_check}", callback_data=f"gdl:mkv:{pid}"
                 ),
             ],
             [
@@ -512,6 +536,9 @@ async def text_message_handler(client, message) -> None:
         target_chat_id=chat_id,
         use_current_chat=True,
         mode="default",
+        ytdl=cfg.ytdl_enabled if cfg else False,
+        ugoira_convert=cfg.ugoira_convert if cfg else False,
+        ugoira_mkvmerge=cfg.ugoira_mkvmerge if cfg else False,
     )
 
     menu_text, markup = _build_menu(pid, pj)
@@ -868,6 +895,31 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer("Custom args reset.")
 
+    elif action == "ytdl":
+        # Toggle yt-dlp integration for HLS/DASH downloads.
+        pj.ytdl = not pj.ytdl
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer("ytdl " + ("enabled" if pj.ytdl else "disabled") + ".")
+
+    elif action == "ugo":
+        # Toggle Pixiv Ugoira FFmpeg conversion.
+        pj.ugoira_convert = not pj.ugoira_convert
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer(
+            "Ugoira conversion " + ("enabled" if pj.ugoira_convert else "disabled") + "."
+        )
+
+    elif action == "mkv":
+        # Toggle mkvmerge-based Ugoira conversion (accurate timecodes).
+        pj.ugoira_mkvmerge = not pj.ugoira_mkvmerge
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer(
+            "MKV timecodes " + ("enabled" if pj.ugoira_mkvmerge else "disabled") + "."
+        )
+
     elif action == "r":
         # --- Run: start the download+upload pipeline ---
         _pending.pop(pid, None)
@@ -890,6 +942,9 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
                 mode=pj.mode,
                 custom_config_path=pj.custom_config_path,
                 custom_args=pj.custom_args,
+                ytdl=pj.ytdl,
+                ugoira_convert=pj.ugoira_convert,
+                ugoira_mkvmerge=pj.ugoira_mkvmerge,
             )
         )
         ut.task = task
@@ -920,6 +975,9 @@ async def _pipeline(
     mode: str = "default",
     custom_config_path: Optional[str] = None,
     custom_args: Optional[str] = None,
+    ytdl: bool = False,
+    ugoira_convert: bool = False,
+    ugoira_mkvmerge: bool = False,
 ) -> None:
     """Run the full download → upload pipeline for a single job.
 
@@ -940,6 +998,13 @@ async def _pipeline(
                             finishes.
         custom_args:        Optional string of extra gallery-dl arguments
                             (e.g. ``"--username foo --password bar"``).
+        ytdl:               When ``True``, pass ``--yt-dlp`` to gallery-dl to
+                            enable yt-dlp integration for HLS/DASH streams.
+        ugoira_convert:     When ``True``, pass ``--ugoira-conv`` so gallery-dl
+                            converts Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+        ugoira_mkvmerge:    When ``True``, pass ``--ugoira-conv-mkvmerge`` so
+                            gallery-dl produces MKV files with accurate
+                            per-frame timecodes using mkvmerge.
     """
     last_edit: list = [0.0]
     # User-supplied config takes precedence over the bot's global config.
@@ -1016,6 +1081,9 @@ async def _pipeline(
                 config_path=config_path,
                 on_file=on_file_duplex,
                 extra_args=custom_args,
+                ytdl=ytdl,
+                ugoira_convert=ugoira_convert,
+                ugoira_mkvmerge=ugoira_mkvmerge,
             )
 
             # Signal the upload loop to stop after draining the queue.
@@ -1096,6 +1164,9 @@ async def _pipeline(
                 config_path=config_path,
                 on_file=on_file,
                 extra_args=custom_args,
+                ytdl=ytdl,
+                ugoira_convert=ugoira_convert,
+                ugoira_mkvmerge=ugoira_mkvmerge,
             )
 
             if ut.cancel_flag:

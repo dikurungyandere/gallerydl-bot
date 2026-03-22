@@ -18,10 +18,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install build tools required to compile C extensions (e.g. TgCrypto).
+# Install build tools required to compile C extensions (e.g. TgCrypto) plus
+# optional media-processing tools:
+#   ffmpeg     – Pixiv Ugoira conversion (--ugoira-conv)
+#   mkvtoolnix – Accurate Ugoira frame timecodes via mkvmerge (--ugoira-conv-mkvmerge)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         libc6-dev \
+        ffmpeg \
+        mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (better Docker layer caching).
