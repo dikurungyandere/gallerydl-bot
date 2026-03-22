@@ -21,6 +21,7 @@ WORKDIR /app
 # Install build tools required to compile C extensions (e.g. TgCrypto).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
+        libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (better Docker layer caching).
