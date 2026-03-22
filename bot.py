@@ -93,6 +93,7 @@ START_TEXT = (
     "(upload each file as soon as it is downloaded).\n"
     "• Set a **custom gallery-dl config** (file or text) for this job only.\n"
     "• Add **custom gallery-dl arguments** (e.g. credentials, filters) for this job only.\n"
+    "• Set **custom cookies** (file or text) for this job only.\n"
     "• Press **Run** to start, or **Cancel** to abort.\n\n"
     "Commands:\n"
     "• /start — Show this message\n"
@@ -108,7 +109,7 @@ HELP_TEXT = (
     "📖 **How to use gallerydl-bot**\n\n"
     "1. Send a URL (e.g. an Instagram post, a Twitter/X post, a Reddit gallery…).\n"
     "2. A **configuration menu** appears — choose your destination, upload mode, "
-    "and any custom config or arguments.\n"
+    "and any custom config, arguments, or cookies.\n"
     "3. Press **▶ Run** — the bot downloads the media and uploads it one file at a time.\n\n"
     "**Parallel downloads**\n"
     "You can send multiple URLs without waiting — each one gets its own menu and job. "
@@ -132,6 +133,11 @@ HELP_TEXT = (
     "`--filter \"width > 1000\"`\n"
     "The arguments apply to this job only. Shows the argument string in the menu "
     "when active. Use **🔄 Reset** to clear them.\n\n"
+    "**Custom cookies (🍪)**\n"
+    "Click **🍪 Cookies** and reply with a Netscape-format cookies file (send as a "
+    "document) or paste the cookies text directly. The cookies override the bot's "
+    "global cookies (if any) for this job only. Shows **Applied** in the menu when "
+    "active. Use **🔄 Reset** to clear them.\n\n"
     "**Limits**\n"
     "• Files larger than ~1950 MB are automatically split into numbered parts\n"
     "  (``.001``, ``.002``, …). Reassemble with: "
@@ -190,6 +196,10 @@ class PendingJob:
     awaiting_custom_config: bool = False
     # True while waiting for the user to reply with custom arguments.
     awaiting_custom_args: bool = False
+    # Path to a user-provided cookies file (Netscape format, temp file); None = use bot default.
+    custom_cookies_path: Optional[str] = None
+    # True while waiting for the user to reply with a custom cookies file/text.
+    awaiting_custom_cookies: bool = False
     # Enable yt-dlp integration for HLS/DASH video downloads.
     ytdl: bool = False
     # Convert Pixiv Ugoira files to WebM/MP4 via FFmpeg.
@@ -218,6 +228,7 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
 
     config_status = "Applied" if pj.custom_config_path else "None"
     args_status = f"`{pj.custom_args}`" if pj.custom_args else "None"
+    cookies_status = "Applied" if pj.custom_cookies_path else "None"
 
     # Show a compact summary of any active advanced options.
     advanced_flags = []
@@ -234,6 +245,7 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
         f"The downloaded files will be uploaded to {dest_label}.\n"
         f"**Custom config:** {config_status}\n"
         f"**Custom args:** {args_status}\n"
+        f"**Cookies:** {cookies_status}\n"
         f"**Advanced:** {advanced_status}"
     )
 
@@ -269,6 +281,9 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    "🍪 Cookies", callback_data=f"gdl:ck:{pid}"
+                ),
                 InlineKeyboardButton(
                     "⚡ Advanced", callback_data=f"gdl:adv:{pid}"
                 ),
@@ -380,6 +395,32 @@ def _build_custom_args_prompt(
             [
                 InlineKeyboardButton("🔄 Reset", callback_data=f"gdl:argrst:{pid}"),
                 InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:xarg:{pid}"),
+            ]
+        ]
+    )
+    return body, markup
+
+
+def _build_custom_cookies_prompt(
+    pid: int, pj: PendingJob, error: str = ""
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """Return *(text, markup)* for the custom-cookies input prompt."""
+    current = "Applied" if pj.custom_cookies_path else "None (using bot default)"
+    body = (
+        f"🔗 **Link:** `{pj.url}`\n\n"
+        f"**Current cookies:** {current}\n\n"
+        "Please **reply to this message** with your cookies.\n"
+        "You can send a Netscape-format cookies file (as a document) or paste the "
+        "cookies text directly."
+    )
+    if error:
+        body += f"\n\n⚠️ {error}"
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔄 Reset", callback_data=f"gdl:ckrst:{pid}"),
+                InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:xck:{pid}"),
             ]
         ]
     )

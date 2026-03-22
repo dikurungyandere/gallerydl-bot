@@ -49,15 +49,28 @@ class Config:
     # Supported schemes: "socks5", "socks4", "http".
     proxy: Optional[dict] = None
 
+    # Path to a cookies file (Netscape format) passed to gallery-dl via
+    # --cookies.  When set, gallery-dl uses these cookies for authenticated
+    # requests.  Loaded from GALLERY_DL_COOKIES_PATH, GALLERY_DL_COOKIES_B64,
+    # or GALLERY_DL_COOKIES env vars.
+    gallery_dl_cookies_path: Optional[str] = None
+
     # Path to a temporary file written from GALLERY_DL_CONFIG_B64 or
     # GALLERY_DL_CONFIG_JSON, if used.
     _temp_config_file: Optional[str] = field(default=None, repr=False)
 
+    # Path to a temporary cookies file written from GALLERY_DL_COOKIES_B64 or
+    # GALLERY_DL_COOKIES, if used.
+    _temp_cookies_file: Optional[str] = field(default=None, repr=False)
+
     def cleanup(self) -> None:
-        """Remove any temporary config file created at startup."""
+        """Remove any temporary config/cookies files created at startup."""
         if self._temp_config_file and os.path.exists(self._temp_config_file):
             os.remove(self._temp_config_file)
             self._temp_config_file = None
+        if self._temp_cookies_file and os.path.exists(self._temp_cookies_file):
+            os.remove(self._temp_cookies_file)
+            self._temp_cookies_file = None
 
 
 def _write_temp_config(parsed: object) -> str:
@@ -75,6 +88,11 @@ def load_config() -> Config:
     1. ``GALLERY_DL_CONFIG_PATH`` – path to an existing config file.
     2. ``GALLERY_DL_CONFIG_B64``  – base64-encoded JSON config string.
     3. ``GALLERY_DL_CONFIG_JSON`` – raw JSON config string (legacy).
+
+    gallery-dl cookies resolution order (first match wins):
+    1. ``GALLERY_DL_COOKIES_PATH`` – path to an existing Netscape cookies file.
+    2. ``GALLERY_DL_COOKIES_B64``  – base64-encoded cookies file content.
+    3. ``GALLERY_DL_COOKIES``      – raw cookies file content.
 
     Returns a populated :class:`Config` instance.
 
@@ -183,6 +201,40 @@ def load_config() -> Config:
         if proxy_password:
             proxy["password"] = proxy_password
 
+    # gallery-dl cookies: prefer an explicit file path, then base64, then raw.
+    gallery_dl_cookies_path = os.getenv("GALLERY_DL_COOKIES_PATH", "").strip() or None
+    temp_cookies_file: Optional[str] = None
+
+    if not gallery_dl_cookies_path:
+        # Try GALLERY_DL_COOKIES_B64 (base64-encoded cookies file content).
+        raw_cookies_b64 = os.getenv("GALLERY_DL_COOKIES_B64", "").strip()
+        if raw_cookies_b64:
+            try:
+                cookies_content = base64.b64decode(raw_cookies_b64).decode("utf-8")
+            except Exception as exc:
+                raise ValueError(
+                    f"GALLERY_DL_COOKIES_B64 is not valid base64: {exc}"
+                ) from exc
+            fd, temp_cookies_path = tempfile.mkstemp(
+                suffix=".txt", prefix="gallerydl_cookies_"
+            )
+            with os.fdopen(fd, "w") as f:
+                f.write(cookies_content)
+            temp_cookies_file = temp_cookies_path
+            gallery_dl_cookies_path = temp_cookies_file
+
+    if not gallery_dl_cookies_path:
+        # Fall back to GALLERY_DL_COOKIES (raw cookies file content).
+        raw_cookies = os.getenv("GALLERY_DL_COOKIES", "").strip()
+        if raw_cookies:
+            fd, temp_cookies_path = tempfile.mkstemp(
+                suffix=".txt", prefix="gallerydl_cookies_"
+            )
+            with os.fdopen(fd, "w") as f:
+                f.write(raw_cookies)
+            temp_cookies_file = temp_cookies_path
+            gallery_dl_cookies_path = temp_cookies_file
+
     cfg = Config(
         api_id=api_id,
         api_hash=api_hash,
@@ -196,6 +248,8 @@ def load_config() -> Config:
         ugoira_convert=ugoira_convert,
         ugoira_mkvmerge=ugoira_mkvmerge,
         proxy=proxy,
+        gallery_dl_cookies_path=gallery_dl_cookies_path,
     )
     cfg._temp_config_file = temp_config_file
+    cfg._temp_cookies_file = temp_cookies_file
     return cfg
