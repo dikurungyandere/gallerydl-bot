@@ -99,7 +99,7 @@ START_TEXT = (
     "• /help  — Show usage instructions\n"
     "• /stats — Show server and bot statistics\n"
     "• /status — Show your currently running jobs\n"
-    "• /cancel — Cancel **all** your active downloads/uploads\n"
+    "• /cancelall — Cancel **all** your active downloads/uploads\n"
     "• /cancel `<job_id>` — Cancel a specific job (ID shown in the status message)\n\n"
     "_⚠️ This bot was created by AI. Use at your own risk._"
 )
@@ -140,7 +140,7 @@ HELP_TEXT = (
     "**Commands**\n"
     "• /stats — Show CPU, memory, disk and active job count.\n"
     "• /status — Show your currently running jobs with live progress.\n"
-    "• /cancel — Stop **all** active downloads/uploads.\n"
+    "• /cancelall — Stop **all** active downloads/uploads.\n"
     "• /cancel `<job_id>` — Stop a specific job.\n\n"
     "_⚠️ This bot was created by AI. Review the source before trusting it._"
 )
@@ -397,31 +397,57 @@ async def status_handler(client, message) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /cancel handler
+# /cancel and /cancelall handlers
 # ---------------------------------------------------------------------------
 
 @require_allowed
 async def cancel_handler(client, message) -> None:
-    """Handle the /cancel [job_id] command.
+    """Handle the /cancel <job_id> command.
 
-    With no argument: cancel all active jobs for this user.
-    With a numeric job_id: cancel only that specific job.
+    Requires a numeric job_id argument to cancel a specific job.
+    Use /cancelall to stop all active jobs at once.
     """
     user_id: int = message.from_user.id
     text: str = message.text or ""
 
-    # Check for an optional numeric job_id argument.
+    # Require a numeric job_id argument.
     parts = text.strip().split(None, 1)
-    job_id_arg: Optional[int] = None
-    if len(parts) == 2:
-        try:
-            job_id_arg = int(parts[1])
-        except ValueError:
-            await message.reply(
-                "⚠️ Invalid job ID. Use /cancel to stop all jobs, "
-                "or /cancel <job_id> for a specific one."
-            )
-            return
+    if len(parts) < 2:
+        await message.reply(
+            "⚠️ Please provide a job ID. Use `/cancel <job_id>` to stop a specific job, "
+            "or `/cancelall` to stop all active jobs."
+        )
+        return
+
+    try:
+        job_id_arg = int(parts[1])
+    except ValueError:
+        await message.reply(
+            "⚠️ Invalid job ID. Use `/cancel <job_id>` for a specific job, "
+            "or `/cancelall` to stop all active jobs."
+        )
+        return
+
+    # Cancel a specific job.
+    ut = task_manager.get(job_id_arg)
+    if ut is None or ut.user_id != user_id:
+        await message.reply(f"ℹ️ No active job #{job_id_arg} found.")
+        return
+
+    cancelled = await task_manager.cancel(job_id_arg)
+    if cancelled:
+        await message.reply(f"⏳ Cancellation requested for job #{job_id_arg}.")
+    else:
+        await message.reply(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
+
+
+@require_allowed
+async def cancel_all_handler(client, message) -> None:
+    """Handle the /cancelall command.
+
+    Cancels all active jobs for this user.
+    """
+    user_id: int = message.from_user.id
 
     active_jobs = task_manager.get_user_tasks(user_id)
 
@@ -429,25 +455,11 @@ async def cancel_handler(client, message) -> None:
         await message.reply("ℹ️ You have no active downloads or uploads to cancel.")
         return
 
-    if job_id_arg is not None:
-        # Cancel a specific job.
-        ut = task_manager.get(job_id_arg)
-        if ut is None or ut.user_id != user_id:
-            await message.reply(f"ℹ️ No active job #{job_id_arg} found.")
-            return
-
-        cancelled = await task_manager.cancel(job_id_arg)
-        if cancelled:
-            await message.reply(f"⏳ Cancellation requested for job #{job_id_arg}.")
-        else:
-            await message.reply(f"ℹ️ Job #{job_id_arg} could not be cancelled.")
+    count = await task_manager.cancel_all(user_id)
+    if count:
+        await message.reply(f"⏳ Cancellation requested for {count} active job(s).")
     else:
-        # Cancel all jobs for this user.
-        count = await task_manager.cancel_all(user_id)
-        if count:
-            await message.reply(f"⏳ Cancellation requested for {count} active job(s).")
-        else:
-            await message.reply("ℹ️ Nothing to cancel.")
+        await message.reply("ℹ️ Nothing to cancel.")
 
 
 # ---------------------------------------------------------------------------
@@ -1249,6 +1261,7 @@ def main() -> None:
         client.add_handler(MessageHandler(stats_handler, filters.command("stats")))
         client.add_handler(MessageHandler(status_handler, filters.command("status")))
         client.add_handler(MessageHandler(cancel_handler, filters.command("cancel")))
+        client.add_handler(MessageHandler(cancel_all_handler, filters.command("cancelall")))
         # Text message handler: processes both custom-chat-input replies (which
         # may contain no URL) AND new URL messages.  The regex URL filter is
         # intentionally omitted here so that non-URL replies (e.g. "@mychannel")
@@ -1257,7 +1270,7 @@ def main() -> None:
             MessageHandler(
                 text_message_handler,
                 filters.text
-                & ~filters.command(["start", "help", "stats", "status", "cancel"]),
+                & ~filters.command(["start", "help", "stats", "status", "cancel", "cancelall"]),
             )
         )
         # Document handler: catches config files sent as replies to the config prompt.
