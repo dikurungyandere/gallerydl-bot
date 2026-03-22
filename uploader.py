@@ -12,7 +12,7 @@ import os
 import time
 from typing import List, Optional
 
-from pyrogram.errors import PhotoInvalidDimensions
+from pyrogram.errors import PhotoInvalidDimensions, PhotoSaveFileInvalid
 
 from task_manager import UserTask
 from utils import (
@@ -216,9 +216,10 @@ async def upload_files(
                         caption=caption,
                         progress=_progress_callback,
                     )
-                except PhotoInvalidDimensions:
-                    # Image dimensions rejected by Telegram (e.g. very tall
-                    # manga pages); send as a document instead.
+                except (PhotoInvalidDimensions, PhotoSaveFileInvalid):
+                    # Image rejected by Telegram (e.g. very tall manga pages,
+                    # or a format the Telegram server can't process as a photo);
+                    # fall back to sending as a document.
                     await client.send_document(  # type: ignore[attr-defined]
                         target_chat_id,
                         file_path,

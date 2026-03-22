@@ -1078,11 +1078,11 @@ class TestBotHelpers(unittest.TestCase):
         ]
         self.assertTrue(all(str(pid) in d for d in btn_data))
 
-    def test_build_menu_has_four_rows(self):
+    def test_build_menu_has_five_rows(self):
         from bot import _build_menu
         pj = self._make_pj()
         _, markup = _build_menu(1, pj)
-        self.assertEqual(len(markup.inline_keyboard), 4)
+        self.assertEqual(len(markup.inline_keyboard), 5)
 
     # ------------------------------------------------------------------
     # _build_custom_input_prompt
@@ -1301,7 +1301,7 @@ class TestDuplexPipeline(unittest.TestCase):
 
         queued_paths = []
 
-        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file):
+        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file, **kwargs):
             for p in files_on_disk:
                 queued_paths.append(p)
                 await on_file(p)
@@ -1522,7 +1522,7 @@ class TestPipelineErrorNotifications(unittest.TestCase):
         job_id, ut = tm.create(user_id=1)
         ut.cancel_flag = False
 
-        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file):
+        async def fake_run_gallery_dl(ut, url, temp_dir, config_path, on_file, **kwargs):
             raise error
 
         import tempfile
@@ -1584,6 +1584,242 @@ class TestPipelineErrorNotifications(unittest.TestCase):
             ValueError("something unexpected")
         )
         mock_status.delete.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# ytdl / ugoira / mkvmerge support tests
+# ---------------------------------------------------------------------------
+
+class TestMediaProcessingConfig(unittest.TestCase):
+    """Tests for the ytdl_enabled, ugoira_convert, ugoira_mkvmerge config options."""
+
+    def _load(self, env: dict):
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            return load_config()
+
+    def test_ytdl_disabled_by_default(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertFalse(cfg.ytdl_enabled)
+
+    def test_ytdl_enabled_via_env(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "YTDL_ENABLED": "true"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertTrue(cfg.ytdl_enabled)
+
+    def test_ytdl_enabled_variants(self):
+        for truthy in ("1", "yes", "true", "True"):
+            env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "YTDL_ENABLED": truthy}
+            with patch.dict(os.environ, env, clear=True):
+                from config import load_config
+                cfg = load_config()
+            self.assertTrue(cfg.ytdl_enabled, f"Expected ytdl_enabled for YTDL_ENABLED={truthy!r}")
+
+    def test_ugoira_convert_disabled_by_default(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertFalse(cfg.ugoira_convert)
+
+    def test_ugoira_convert_enabled_via_env(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "UGOIRA_CONVERT": "true"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertTrue(cfg.ugoira_convert)
+
+    def test_ugoira_mkvmerge_disabled_by_default(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertFalse(cfg.ugoira_mkvmerge)
+
+    def test_ugoira_mkvmerge_enabled_via_env(self):
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t", "UGOIRA_MKVMERGE": "true"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertTrue(cfg.ugoira_mkvmerge)
+
+
+class TestDownloaderMediaFlags(unittest.TestCase):
+    """Tests for the new ytdl/ugoira/mkvmerge flags in _build_gallery_dl_cmd."""
+
+    def test_ytdl_flag_added_when_true(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ytdl=True)
+        self.assertIn("--yt-dlp", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_ytdl_flag_not_added_when_false(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ytdl=False)
+        self.assertNotIn("--yt-dlp", cmd)
+
+    def test_ugoira_conv_flag_added_when_true(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ugoira_convert=True)
+        self.assertIn("--ugoira-conv", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_ugoira_conv_flag_not_added_when_false(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ugoira_convert=False)
+        self.assertNotIn("--ugoira-conv", cmd)
+
+    def test_ugoira_mkvmerge_flag_added_when_true(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ugoira_mkvmerge=True)
+        self.assertIn("--ugoira-conv-mkvmerge", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_ugoira_mkvmerge_flag_not_added_when_false(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, ugoira_mkvmerge=False)
+        self.assertNotIn("--ugoira-conv-mkvmerge", cmd)
+
+    def test_all_flags_combined(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd(
+            "https://x.com", "/tmp/d", None,
+            extra_args="--username foo",
+            ytdl=True,
+            ugoira_convert=True,
+            ugoira_mkvmerge=True,
+        )
+        self.assertIn("--yt-dlp", cmd)
+        self.assertIn("--ugoira-conv", cmd)
+        self.assertIn("--ugoira-conv-mkvmerge", cmd)
+        self.assertIn("--username", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_flags_appear_before_extra_args_and_url(self):
+        """Builtin flags should be injected before extra_args and the URL."""
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd(
+            "https://x.com", "/tmp/d", None,
+            extra_args="--filter \"width>100\"",
+            ytdl=True,
+        )
+        ytdl_idx = cmd.index("--yt-dlp")
+        url_idx = cmd.index("https://x.com")
+        self.assertLess(ytdl_idx, url_idx)
+
+
+class TestMediaProcessingMenu(unittest.TestCase):
+    """Tests for the media-processing toggle buttons added to _build_menu."""
+
+    def _make_pj(self, **kwargs):
+        from bot import PendingJob
+        defaults = dict(
+            url="https://example.com/gallery",
+            user_id=42,
+            source_chat_id=100,
+            target_chat_id=100,
+            use_current_chat=True,
+            mode="default",
+        )
+        defaults.update(kwargs)
+        return PendingJob(**defaults)
+
+    def test_pending_job_media_flags_default_to_false(self):
+        from bot import PendingJob
+        pj = PendingJob(url="https://x.com", user_id=1, source_chat_id=10, target_chat_id=10)
+        self.assertFalse(pj.ytdl)
+        self.assertFalse(pj.ugoira_convert)
+        self.assertFalse(pj.ugoira_mkvmerge)
+
+    def test_menu_has_ytdl_button(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj()
+        _, markup = _build_advanced_menu(1, pj)
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("gdl:ytdl:" in d for d in btn_data))
+
+    def test_menu_has_ugoira_button(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj()
+        _, markup = _build_advanced_menu(1, pj)
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("gdl:ugo:" in d for d in btn_data))
+
+    def test_menu_has_mkv_button(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj()
+        _, markup = _build_advanced_menu(1, pj)
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("gdl:mkv:" in d for d in btn_data))
+
+    def test_menu_ytdl_button_shows_check_when_enabled(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj(ytdl=True)
+        _, markup = _build_advanced_menu(1, pj)
+        btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        ytdl_btn = next(b for b in btn_labels if "ytdl" in b or "yt-dlp" in b)
+        self.assertIn("✓", ytdl_btn)
+
+    def test_menu_ytdl_button_no_check_when_disabled(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj(ytdl=False)
+        _, markup = _build_advanced_menu(1, pj)
+        btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        ytdl_btn = next(b for b in btn_labels if "ytdl" in b or "yt-dlp" in b)
+        self.assertNotIn("✓", ytdl_btn)
+
+    def test_menu_ugoira_button_shows_check_when_enabled(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj(ugoira_convert=True)
+        _, markup = _build_advanced_menu(1, pj)
+        btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        ugo_btn = next(b for b in btn_labels if "Ugoira" in b)
+        self.assertIn("✓", ugo_btn)
+
+    def test_menu_mkv_button_shows_check_when_enabled(self):
+        from bot import _build_advanced_menu
+        pj = self._make_pj(ugoira_mkvmerge=True)
+        _, markup = _build_advanced_menu(1, pj)
+        btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
+        mkv_btn = next(b for b in btn_labels if "MKV" in b)
+        self.assertIn("✓", mkv_btn)
+
+    def test_menu_text_shows_ytdl_status(self):
+        # Main menu shows a compact advanced summary; advanced menu shows full status.
+        from bot import _build_menu, _build_advanced_menu
+        pj_on = self._make_pj(ytdl=True)
+        pj_off = self._make_pj(ytdl=False)
+        # Main menu lists active flags by name.
+        text_on, _ = _build_menu(1, pj_on)
+        text_off, _ = _build_menu(2, pj_off)
+        self.assertIn("yt-dlp", text_on)
+        # Advanced menu shows ✓ when enabled.
+        adv_on, _ = _build_advanced_menu(1, pj_on)
+        adv_off, _ = _build_advanced_menu(2, pj_off)
+        self.assertIn("✓", adv_on)
+
+    def test_menu_text_shows_ugoira_status(self):
+        from bot import _build_menu, _build_advanced_menu
+        pj = self._make_pj(ugoira_convert=True)
+        text, _ = _build_menu(1, pj)
+        self.assertIn("Ugoira", text)
+        adv_text, _ = _build_advanced_menu(1, pj)
+        self.assertIn("Ugoira", adv_text)
+        self.assertIn("✓", adv_text)
+
+    def test_menu_text_shows_mkv_status(self):
+        from bot import _build_menu, _build_advanced_menu
+        pj = self._make_pj(ugoira_mkvmerge=True)
+        text, _ = _build_menu(1, pj)
+        self.assertIn("MKV", text)
+        adv_text, _ = _build_advanced_menu(1, pj)
+        self.assertIn("MKV", adv_text)
+        self.assertIn("✓", adv_text)
 
 
 if __name__ == "__main__":

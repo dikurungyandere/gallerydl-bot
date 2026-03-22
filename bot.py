@@ -190,6 +190,12 @@ class PendingJob:
     awaiting_custom_config: bool = False
     # True while waiting for the user to reply with custom arguments.
     awaiting_custom_args: bool = False
+    # Enable yt-dlp integration for HLS/DASH video downloads.
+    ytdl: bool = False
+    # Convert Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+    ugoira_convert: bool = False
+    # Use mkvmerge for Ugoira conversion (accurate per-frame timecodes).
+    ugoira_mkvmerge: bool = False
 
 
 # pending_id (incrementing int) → PendingJob
@@ -213,11 +219,22 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
     config_status = "Applied" if pj.custom_config_path else "None"
     args_status = f"`{pj.custom_args}`" if pj.custom_args else "None"
 
+    # Show a compact summary of any active advanced options.
+    advanced_flags = []
+    if pj.ytdl:
+        advanced_flags.append("yt-dlp")
+    if pj.ugoira_convert:
+        advanced_flags.append("Ugoira")
+    if pj.ugoira_mkvmerge:
+        advanced_flags.append("MKV")
+    advanced_status = ", ".join(advanced_flags) if advanced_flags else "None"
+
     text = (
         f"🔗 **Link:** `{pj.url}`\n\n"
         f"The downloaded files will be uploaded to {dest_label}.\n"
         f"**Custom config:** {config_status}\n"
-        f"**Custom args:** {args_status}"
+        f"**Custom args:** {args_status}\n"
+        f"**Advanced:** {advanced_status}"
     )
 
     c_check = " ✓" if pj.use_current_chat else ""
@@ -252,8 +269,48 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    "⚡ Advanced", callback_data=f"gdl:adv:{pid}"
+                ),
+            ],
+            [
                 InlineKeyboardButton("▶ Run", callback_data=f"gdl:r:{pid}"),
                 InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:x:{pid}"),
+            ],
+        ]
+    )
+    return text, markup
+
+
+def _build_advanced_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
+    """Return *(text, markup)* for the advanced-options sub-menu."""
+    ytdl_check = " ✓" if pj.ytdl else ""
+    ugo_check = " ✓" if pj.ugoira_convert else ""
+    mkv_check = " ✓" if pj.ugoira_mkvmerge else ""
+
+    text = (
+        f"🔗 **Link:** `{pj.url}`\n\n"
+        "⚡ **Advanced options** — toggle flags passed to gallery-dl:\n\n"
+        f"• **yt-dlp{ytdl_check}** — HLS/DASH video streams (`--yt-dlp`)\n"
+        f"• **Ugoira conv{ugo_check}** — Pixiv Ugoira → WebM/MP4 via FFmpeg (`--ugoira-conv`)\n"
+        f"• **MKV timecodes{mkv_check}** — Accurate Ugoira timecodes via mkvmerge (`--ugoira-conv-mkvmerge`)"
+    )
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"🎬 yt-dlp{ytdl_check}", callback_data=f"gdl:ytdl:{pid}"
+                ),
+                InlineKeyboardButton(
+                    f"🎞️ Ugoira{ugo_check}", callback_data=f"gdl:ugo:{pid}"
+                ),
+                InlineKeyboardButton(
+                    f"📼 MKV{mkv_check}", callback_data=f"gdl:mkv:{pid}"
+                ),
+            ],
+            [
+                InlineKeyboardButton("◀ Back", callback_data=f"gdl:advback:{pid}"),
             ],
         ]
     )
@@ -512,6 +569,9 @@ async def text_message_handler(client, message) -> None:
         target_chat_id=chat_id,
         use_current_chat=True,
         mode="default",
+        ytdl=cfg.ytdl_enabled if cfg else False,
+        ugoira_convert=cfg.ugoira_convert if cfg else False,
+        ugoira_mkvmerge=cfg.ugoira_mkvmerge if cfg else False,
     )
 
     menu_text, markup = _build_menu(pid, pj)
@@ -868,6 +928,43 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer("Custom args reset.")
 
+    elif action == "ytdl":
+        # Toggle yt-dlp integration for HLS/DASH downloads.
+        pj.ytdl = not pj.ytdl
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer("yt-dlp " + ("enabled" if pj.ytdl else "disabled") + ".")
+
+    elif action == "ugo":
+        # Toggle Pixiv Ugoira FFmpeg conversion.
+        pj.ugoira_convert = not pj.ugoira_convert
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer(
+            "Ugoira conversion " + ("enabled" if pj.ugoira_convert else "disabled") + "."
+        )
+
+    elif action == "mkv":
+        # Toggle mkvmerge-based Ugoira conversion (accurate timecodes).
+        pj.ugoira_mkvmerge = not pj.ugoira_mkvmerge
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer(
+            "MKV timecodes " + ("enabled" if pj.ugoira_mkvmerge else "disabled") + "."
+        )
+
+    elif action == "adv":
+        # Open the advanced options sub-menu.
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "advback":
+        # Return to the main menu from the advanced sub-menu.
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
+
     elif action == "r":
         # --- Run: start the download+upload pipeline ---
         _pending.pop(pid, None)
@@ -890,6 +987,9 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
                 mode=pj.mode,
                 custom_config_path=pj.custom_config_path,
                 custom_args=pj.custom_args,
+                ytdl=pj.ytdl,
+                ugoira_convert=pj.ugoira_convert,
+                ugoira_mkvmerge=pj.ugoira_mkvmerge,
             )
         )
         ut.task = task
@@ -920,6 +1020,9 @@ async def _pipeline(
     mode: str = "default",
     custom_config_path: Optional[str] = None,
     custom_args: Optional[str] = None,
+    ytdl: bool = False,
+    ugoira_convert: bool = False,
+    ugoira_mkvmerge: bool = False,
 ) -> None:
     """Run the full download → upload pipeline for a single job.
 
@@ -940,6 +1043,13 @@ async def _pipeline(
                             finishes.
         custom_args:        Optional string of extra gallery-dl arguments
                             (e.g. ``"--username foo --password bar"``).
+        ytdl:               When ``True``, pass ``--yt-dlp`` to gallery-dl to
+                            enable yt-dlp integration for HLS/DASH streams.
+        ugoira_convert:     When ``True``, pass ``--ugoira-conv`` so gallery-dl
+                            converts Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+        ugoira_mkvmerge:    When ``True``, pass ``--ugoira-conv-mkvmerge`` so
+                            gallery-dl produces MKV files with accurate
+                            per-frame timecodes using mkvmerge.
     """
     last_edit: list = [0.0]
     # User-supplied config takes precedence over the bot's global config.
@@ -1016,6 +1126,9 @@ async def _pipeline(
                 config_path=config_path,
                 on_file=on_file_duplex,
                 extra_args=custom_args,
+                ytdl=ytdl,
+                ugoira_convert=ugoira_convert,
+                ugoira_mkvmerge=ugoira_mkvmerge,
             )
 
             # Signal the upload loop to stop after draining the queue.
@@ -1096,6 +1209,9 @@ async def _pipeline(
                 config_path=config_path,
                 on_file=on_file,
                 extra_args=custom_args,
+                ytdl=ytdl,
+                ugoira_convert=ugoira_convert,
+                ugoira_mkvmerge=ugoira_mkvmerge,
             )
 
             if ut.cancel_flag:
@@ -1253,6 +1369,7 @@ def main() -> None:
             api_id=cfg.api_id,
             api_hash=cfg.api_hash,
             bot_token=cfg.bot_token,
+            proxy=cfg.proxy,
         )
 
         # Register handlers (must be done after Client is created).

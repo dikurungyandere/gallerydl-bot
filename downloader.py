@@ -29,20 +29,38 @@ def _build_gallery_dl_cmd(
     dest: str,
     config_path: Optional[str],
     extra_args: Optional[str] = None,
+    ytdl: bool = False,
+    ugoira_convert: bool = False,
+    ugoira_mkvmerge: bool = False,
 ) -> List[str]:
     """Construct the gallery-dl command list.
 
     Args:
-        url:         The URL to download.
-        dest:        Destination directory for downloaded files.
-        config_path: Optional path to a gallery-dl config file.
-        extra_args:  Optional string of extra gallery-dl arguments (e.g.
-                     ``"--username foo --password bar"``).  Parsed with
-                     :mod:`shlex` so quoted tokens are handled correctly.
+        url:             The URL to download.
+        dest:            Destination directory for downloaded files.
+        config_path:     Optional path to a gallery-dl config file.
+        extra_args:      Optional string of extra gallery-dl arguments (e.g.
+                         ``"--username foo --password bar"``).  Parsed with
+                         :mod:`shlex` so quoted tokens are handled correctly.
+        ytdl:            When ``True``, pass ``--yt-dlp`` so gallery-dl uses
+                         yt-dlp for HLS/DASH streams and other ytdl-handled
+                         URLs.
+        ugoira_convert:  When ``True``, pass ``--ugoira-conv`` so gallery-dl
+                         converts Pixiv Ugoira ZIP files to WebM/MP4 via
+                         FFmpeg.
+        ugoira_mkvmerge: When ``True``, pass ``--ugoira-conv-mkvmerge`` so
+                         gallery-dl produces MKV files with accurate per-frame
+                         timecodes using mkvmerge instead of FFmpeg.
     """
     cmd = ["gallery-dl", "--dest", dest]
     if config_path:
         cmd.extend(["--config", config_path])
+    if ytdl:
+        cmd.append("--yt-dlp")
+    if ugoira_convert:
+        cmd.append("--ugoira-conv")
+    if ugoira_mkvmerge:
+        cmd.append("--ugoira-conv-mkvmerge")
     if extra_args:
         cmd.extend(shlex.split(extra_args))
     cmd.append(url)
@@ -56,6 +74,9 @@ async def run_gallery_dl(
     config_path: Optional[str],
     on_file: Callable[[str], Awaitable[None]],
     extra_args: Optional[str] = None,
+    ytdl: bool = False,
+    ugoira_convert: bool = False,
+    ugoira_mkvmerge: bool = False,
 ) -> List[str]:
     """Run gallery-dl and collect downloaded file paths.
 
@@ -63,17 +84,24 @@ async def run_gallery_dl(
     or even days. Use /cancel to stop an in-progress download at any time.
 
     Args:
-        ut:          The :class:`~task_manager.UserTask` for this job (used to
-                     check ``cancel_flag`` and store the subprocess handle).
-        url:         URL to download.
-        temp_dir:    Directory where gallery-dl writes files.
-        config_path: Optional path to gallery-dl config file.
-        on_file:     Async callback called with the absolute path of each file
-                     as soon as gallery-dl reports it on stdout.  Use this to
-                     upload files immediately rather than waiting for the whole
-                     batch to finish.
-        extra_args:  Optional string of extra gallery-dl arguments (e.g.
-                     ``"--username foo --password bar"``).
+        ut:              The :class:`~task_manager.UserTask` for this job (used to
+                         check ``cancel_flag`` and store the subprocess handle).
+        url:             URL to download.
+        temp_dir:        Directory where gallery-dl writes files.
+        config_path:     Optional path to gallery-dl config file.
+        on_file:         Async callback called with the absolute path of each file
+                         as soon as gallery-dl reports it on stdout.  Use this to
+                         upload files immediately rather than waiting for the whole
+                         batch to finish.
+        extra_args:      Optional string of extra gallery-dl arguments (e.g.
+                         ``"--username foo --password bar"``).
+        ytdl:            When ``True``, pass ``--yt-dlp`` to enable yt-dlp
+                         integration for HLS/DASH video downloads.
+        ugoira_convert:  When ``True``, pass ``--ugoira-conv`` to convert
+                         Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+        ugoira_mkvmerge: When ``True``, pass ``--ugoira-conv-mkvmerge`` to
+                         produce MKV files with accurate frame timecodes using
+                         mkvmerge.
 
     Returns:
         Sorted list of absolute paths to all downloaded files (including any
@@ -83,7 +111,10 @@ async def run_gallery_dl(
         RuntimeError: If gallery-dl exits with a non-zero code.
         asyncio.CancelledError: If cancellation was requested.
     """
-    cmd = _build_gallery_dl_cmd(url, temp_dir, config_path, extra_args)
+    cmd = _build_gallery_dl_cmd(
+        url, temp_dir, config_path, extra_args,
+        ytdl=ytdl, ugoira_convert=ugoira_convert, ugoira_mkvmerge=ugoira_mkvmerge,
+    )
     logger.info("Running: %s", " ".join(cmd))
 
     process = await asyncio.create_subprocess_exec(
