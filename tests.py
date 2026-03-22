@@ -237,6 +237,130 @@ class TestConfig(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config()
 
+    def test_gallery_dl_cookies_path_used_directly(self):
+        """GALLERY_DL_COOKIES_PATH is stored directly without a temp file."""
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            ck_path = f.name
+        try:
+            env = {
+                "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+                "GALLERY_DL_COOKIES_PATH": ck_path,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                from config import load_config
+                cfg = load_config()
+            self.assertEqual(cfg.gallery_dl_cookies_path, ck_path)
+            self.assertIsNone(cfg._temp_cookies_file)
+        finally:
+            os.unlink(ck_path)
+
+    def test_gallery_dl_cookies_b64_writes_temp_file(self):
+        """GALLERY_DL_COOKIES_B64 is decoded and written to a temp file."""
+        cookies_content = "# Netscape HTTP Cookie File\nexample.com\tFALSE\t/\tFALSE\t0\tsession\tabc"
+        b64_value = base64.b64encode(cookies_content.encode()).decode()
+        env = {
+            "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+            "GALLERY_DL_COOKIES_B64": b64_value,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        try:
+            self.assertIsNotNone(cfg.gallery_dl_cookies_path)
+            self.assertTrue(os.path.exists(cfg.gallery_dl_cookies_path))
+            with open(cfg.gallery_dl_cookies_path) as f:
+                self.assertIn("session", f.read())
+        finally:
+            cfg.cleanup()
+
+    def test_gallery_dl_cookies_b64_invalid_raises(self):
+        """Invalid base64 in GALLERY_DL_COOKIES_B64 raises ValueError."""
+        env = {
+            "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+            "GALLERY_DL_COOKIES_B64": "!!!not-base64!!!",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            with self.assertRaises(ValueError):
+                load_config()
+
+    def test_gallery_dl_cookies_raw_writes_temp_file(self):
+        """GALLERY_DL_COOKIES (raw text) is written to a temp file."""
+        cookies_content = "# Netscape HTTP Cookie File\nexample.com\tFALSE\t/\tFALSE\t0\ttoken\txyz"
+        env = {
+            "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+            "GALLERY_DL_COOKIES": cookies_content,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        try:
+            self.assertIsNotNone(cfg.gallery_dl_cookies_path)
+            self.assertTrue(os.path.exists(cfg.gallery_dl_cookies_path))
+            with open(cfg.gallery_dl_cookies_path) as f:
+                self.assertIn("token", f.read())
+        finally:
+            cfg.cleanup()
+
+    def test_cookies_path_takes_priority_over_b64(self):
+        """GALLERY_DL_COOKIES_PATH takes priority over GALLERY_DL_COOKIES_B64."""
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            ck_path = f.name
+        try:
+            b64_value = base64.b64encode(b"cookies content").decode()
+            env = {
+                "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+                "GALLERY_DL_COOKIES_PATH": ck_path,
+                "GALLERY_DL_COOKIES_B64": b64_value,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                from config import load_config
+                cfg = load_config()
+            self.assertEqual(cfg.gallery_dl_cookies_path, ck_path)
+            self.assertIsNone(cfg._temp_cookies_file)
+        finally:
+            os.unlink(ck_path)
+
+    def test_cookies_b64_takes_priority_over_raw(self):
+        """GALLERY_DL_COOKIES_B64 takes priority over GALLERY_DL_COOKIES."""
+        b64_value = base64.b64encode(b"b64 cookies").decode()
+        env = {
+            "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+            "GALLERY_DL_COOKIES_B64": b64_value,
+            "GALLERY_DL_COOKIES": "raw cookies",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        try:
+            with open(cfg.gallery_dl_cookies_path) as f:
+                self.assertIn("b64 cookies", f.read())
+        finally:
+            cfg.cleanup()
+
+    def test_no_cookies_env_gives_none(self):
+        """When no cookies env var is set, gallery_dl_cookies_path is None."""
+        env = {"API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t"}
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        self.assertIsNone(cfg.gallery_dl_cookies_path)
+
+    def test_cleanup_removes_temp_cookies_file(self):
+        """cleanup() removes the temporary cookies file."""
+        cookies_content = "# cookies"
+        env = {
+            "API_ID": "1", "API_HASH": "h", "BOT_TOKEN": "t",
+            "GALLERY_DL_COOKIES": cookies_content,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            from config import load_config
+            cfg = load_config()
+        ck_path = cfg.gallery_dl_cookies_path
+        self.assertTrue(os.path.exists(ck_path))
+        cfg.cleanup()
+        self.assertFalse(os.path.exists(ck_path))
+
 
 # ---------------------------------------------------------------------------
 # task_manager.py tests
@@ -856,6 +980,18 @@ class TestDownloader(unittest.TestCase):
         self.assertNotIn("--username", cmd)
         self.assertEqual(cmd[-1], "https://x.com")
 
+    def test_build_gallery_dl_cmd_with_cookies(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, cookies_path="/tmp/ck.txt")
+        self.assertIn("--cookies", cmd)
+        self.assertIn("/tmp/ck.txt", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_build_gallery_dl_cmd_no_cookies_by_default(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None)
+        self.assertNotIn("--cookies", cmd)
+
     def test_scan_directory(self):
         from downloader import _scan_directory
         with tempfile.TemporaryDirectory() as d:
@@ -1267,6 +1403,85 @@ class TestBotHelpers(unittest.TestCase):
         from bot import _build_custom_args_prompt
         pj = self._make_pj()
         text, _ = _build_custom_args_prompt(4, pj)
+        self.assertNotIn("⚠️", text)
+
+    # ------------------------------------------------------------------
+    # Cookies: PendingJob fields
+    # ------------------------------------------------------------------
+
+    def test_pending_job_cookies_fields_default_to_none(self):
+        from bot import PendingJob
+        pj = PendingJob(url="https://x.com", user_id=1, source_chat_id=10, target_chat_id=10)
+        self.assertIsNone(pj.custom_cookies_path)
+        self.assertFalse(pj.awaiting_custom_cookies)
+
+    # ------------------------------------------------------------------
+    # Cookies: _build_menu status line and button
+    # ------------------------------------------------------------------
+
+    def test_build_menu_shows_cookies_none_when_unset(self):
+        from bot import _build_menu
+        pj = self._make_pj(custom_cookies_path=None)
+        text, _ = _build_menu(1, pj)
+        lines = text.splitlines()
+        ck_line = next(l for l in lines if "Cookies:" in l)
+        self.assertIn("None", ck_line)
+
+    def test_build_menu_shows_cookies_applied_when_set(self):
+        from bot import _build_menu
+        pj = self._make_pj(custom_cookies_path="/tmp/ck.txt")
+        text, _ = _build_menu(1, pj)
+        lines = text.splitlines()
+        ck_line = next(l for l in lines if "Cookies:" in l)
+        self.assertIn("Applied", ck_line)
+
+    def test_build_menu_has_cookies_button(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        _, markup = _build_menu(1, pj)
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("gdl:ck:" in d for d in btn_data))
+
+    # ------------------------------------------------------------------
+    # Cookies: _build_custom_cookies_prompt
+    # ------------------------------------------------------------------
+
+    def test_build_custom_cookies_prompt_contains_url(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj(url="https://example.com/g")
+        text, _ = _build_custom_cookies_prompt(5, pj)
+        self.assertIn("https://example.com/g", text)
+
+    def test_build_custom_cookies_prompt_shows_none_when_unset(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj(custom_cookies_path=None)
+        text, _ = _build_custom_cookies_prompt(5, pj)
+        self.assertIn("None", text)
+
+    def test_build_custom_cookies_prompt_shows_applied_when_set(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj(custom_cookies_path="/tmp/ck.txt")
+        text, _ = _build_custom_cookies_prompt(5, pj)
+        self.assertIn("Applied", text)
+
+    def test_build_custom_cookies_prompt_has_reset_and_cancel_buttons(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj()
+        _, markup = _build_custom_cookies_prompt(5, pj)
+        btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        self.assertTrue(any("gdl:ckrst:" in d for d in btn_data))
+        self.assertTrue(any("gdl:xck:" in d for d in btn_data))
+
+    def test_build_custom_cookies_prompt_error_shown(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_cookies_prompt(5, pj, error="Download failed.")
+        self.assertIn("Download failed.", text)
+
+    def test_build_custom_cookies_prompt_no_error_by_default(self):
+        from bot import _build_custom_cookies_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_cookies_prompt(5, pj)
         self.assertNotIn("⚠️", text)
 
 

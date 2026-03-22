@@ -595,6 +595,9 @@ async def text_message_handler(client, message) -> None:
             if pj.awaiting_custom_args:
                 await _handle_custom_args_input(client, message, pid, pj)
                 return
+            if pj.awaiting_custom_cookies:
+                await _handle_custom_cookies_input(client, message, pid, pj)
+                return
 
     # --- Check for a URL ---
     match = URL_RE.search(text)
@@ -816,6 +819,91 @@ async def _handle_custom_args_input(
             pass
 
 
+async def _handle_custom_cookies_input(
+    client, message, pid: int, pj: PendingJob
+) -> None:
+    """Apply the custom-cookies reply (text or document) from the user."""
+    # Try to delete the user's reply to keep the chat clean.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Fetch the menu message so we can edit it.
+    try:
+        menu_msg = await client.get_messages(pj.source_chat_id, pj.menu_message_id)
+    except Exception:
+        menu_msg = None
+
+    new_cookies_path: Optional[str] = None
+
+    if message.document:
+        # Download the document to a temporary file.
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".txt", delete=False, prefix="gdlbot_ck_"
+            )
+            tmp.close()
+            await message.download(file_name=tmp.name)
+            new_cookies_path = tmp.name
+        except Exception as exc:
+            prompt_text, markup = _build_custom_cookies_prompt(
+                pid, pj, error=f"Failed to download the cookies file: {exc}"
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+    else:
+        cookies_text = (message.text or message.caption or "").strip()
+        if not cookies_text:
+            prompt_text, markup = _build_custom_cookies_prompt(
+                pid, pj, error="Empty cookies received. Please send a file or paste cookies text."
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False,
+                prefix="gdlbot_ck_", encoding="utf-8"
+            ) as tmp:
+                tmp.write(cookies_text)
+            new_cookies_path = tmp.name
+        except Exception as exc:
+            prompt_text, markup = _build_custom_cookies_prompt(
+                pid, pj, error=f"Failed to save cookies: {exc}"
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+
+    # Clean up any previously set temp cookies file.
+    if pj.custom_cookies_path and os.path.isfile(pj.custom_cookies_path):
+        try:
+            os.unlink(pj.custom_cookies_path)
+        except Exception:
+            pass
+
+    pj.custom_cookies_path = new_cookies_path
+    pj.awaiting_custom_cookies = False
+
+    if menu_msg:
+        try:
+            menu_text, markup = _build_menu(pid, pj)
+            await menu_msg.edit(menu_text, reply_markup=markup)
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Callback query handler (inline keyboard buttons)
 # ---------------------------------------------------------------------------
@@ -969,6 +1057,33 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer("Custom args reset.")
 
+    elif action == "ck":
+        # Open the custom cookies prompt.
+        pj.awaiting_custom_cookies = True
+        prompt_text, markup = _build_custom_cookies_prompt(pid, pj)
+        await msg.edit(prompt_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "xck":
+        # Cancel custom-cookies input; return to the main menu.
+        pj.awaiting_custom_cookies = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "ckrst":
+        # Reset custom cookies to None; return to the main menu.
+        if pj.custom_cookies_path and os.path.isfile(pj.custom_cookies_path):
+            try:
+                os.unlink(pj.custom_cookies_path)
+            except Exception:
+                pass
+        pj.custom_cookies_path = None
+        pj.awaiting_custom_cookies = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer("Cookies reset.")
+
     elif action == "ytdl":
         # Toggle yt-dlp integration for HLS/DASH downloads.
         pj.ytdl = not pj.ytdl
@@ -1028,6 +1143,7 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
                 mode=pj.mode,
                 custom_config_path=pj.custom_config_path,
                 custom_args=pj.custom_args,
+                custom_cookies_path=pj.custom_cookies_path,
                 ytdl=pj.ytdl,
                 ugoira_convert=pj.ugoira_convert,
                 ugoira_mkvmerge=pj.ugoira_mkvmerge,
@@ -1037,10 +1153,15 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await callback_query.answer("Starting download…")
 
     elif action == "x":
-        # Cancel the pending configuration; clean up any temp config file.
+        # Cancel the pending configuration; clean up any temp config/cookies files.
         if pj.custom_config_path and os.path.isfile(pj.custom_config_path):
             try:
                 os.unlink(pj.custom_config_path)
+            except Exception:
+                pass
+        if pj.custom_cookies_path and os.path.isfile(pj.custom_cookies_path):
+            try:
+                os.unlink(pj.custom_cookies_path)
             except Exception:
                 pass
         _pending.pop(pid, None)
@@ -1061,6 +1182,7 @@ async def _pipeline(
     mode: str = "default",
     custom_config_path: Optional[str] = None,
     custom_args: Optional[str] = None,
+    custom_cookies_path: Optional[str] = None,
     ytdl: bool = False,
     ugoira_convert: bool = False,
     ugoira_mkvmerge: bool = False,
@@ -1068,33 +1190,39 @@ async def _pipeline(
     """Run the full download → upload pipeline for a single job.
 
     Args:
-        job_id:             Unique job identifier (shown in status messages).
-        ut:                 The :class:`~task_manager.UserTask` for this job.
-        url:                Gallery URL to download.
-        temp_dir:           Temporary directory for downloaded files.
-        target_chat_id:     Telegram chat to upload files to.
-        status_message:     The :class:`Message` used for status updates.
-        mode:               ``"default"`` — download all files first, then
-                            upload one-by-one.  ``"duplex"`` — upload each
-                            file as soon as it is downloaded, concurrently
-                            with remaining downloads.
-        custom_config_path: Optional path to a user-supplied gallery-dl config
-                            file.  Takes precedence over the bot's global
-                            config.  The file is deleted when the pipeline
-                            finishes.
-        custom_args:        Optional string of extra gallery-dl arguments
-                            (e.g. ``"--username foo --password bar"``).
-        ytdl:               When ``True``, pass ``--yt-dlp`` to gallery-dl to
-                            enable yt-dlp integration for HLS/DASH streams.
-        ugoira_convert:     When ``True``, pass ``--ugoira-conv`` so gallery-dl
-                            converts Pixiv Ugoira files to WebM/MP4 via FFmpeg.
-        ugoira_mkvmerge:    When ``True``, pass ``--ugoira-conv-mkvmerge`` so
-                            gallery-dl produces MKV files with accurate
-                            per-frame timecodes using mkvmerge.
+        job_id:              Unique job identifier (shown in status messages).
+        ut:                  The :class:`~task_manager.UserTask` for this job.
+        url:                 Gallery URL to download.
+        temp_dir:            Temporary directory for downloaded files.
+        target_chat_id:      Telegram chat to upload files to.
+        status_message:      The :class:`Message` used for status updates.
+        mode:                ``"default"`` — download all files first, then
+                             upload one-by-one.  ``"duplex"`` — upload each
+                             file as soon as it is downloaded, concurrently
+                             with remaining downloads.
+        custom_config_path:  Optional path to a user-supplied gallery-dl config
+                             file.  Takes precedence over the bot's global
+                             config.  The file is deleted when the pipeline
+                             finishes.
+        custom_args:         Optional string of extra gallery-dl arguments
+                             (e.g. ``"--username foo --password bar"``).
+        custom_cookies_path: Optional path to a user-supplied Netscape-format
+                             cookies file.  Takes precedence over the bot's
+                             global cookies.  The file is deleted when the
+                             pipeline finishes.
+        ytdl:                When ``True``, pass ``--yt-dlp`` to gallery-dl to
+                             enable yt-dlp integration for HLS/DASH streams.
+        ugoira_convert:      When ``True``, pass ``--ugoira-conv`` so gallery-dl
+                             converts Pixiv Ugoira files to WebM/MP4 via FFmpeg.
+        ugoira_mkvmerge:     When ``True``, pass ``--ugoira-conv-mkvmerge`` so
+                             gallery-dl produces MKV files with accurate
+                             per-frame timecodes using mkvmerge.
     """
     last_edit: list = [0.0]
     # User-supplied config takes precedence over the bot's global config.
     config_path = custom_config_path or (cfg.gallery_dl_config_path if cfg else None)
+    # User-supplied cookies take precedence over the bot's global cookies.
+    cookies_path = custom_cookies_path or (cfg.gallery_dl_cookies_path if cfg else None)
 
     # Populate UserTask fields so /status can show live information.
     ut.url = url
@@ -1170,6 +1298,7 @@ async def _pipeline(
                 ytdl=ytdl,
                 ugoira_convert=ugoira_convert,
                 ugoira_mkvmerge=ugoira_mkvmerge,
+                cookies_path=cookies_path,
             )
 
             # Signal the upload loop to stop after draining the queue.
@@ -1253,6 +1382,7 @@ async def _pipeline(
                 ytdl=ytdl,
                 ugoira_convert=ugoira_convert,
                 ugoira_mkvmerge=ugoira_mkvmerge,
+                cookies_path=cookies_path,
             )
 
             if ut.cancel_flag:
@@ -1359,6 +1489,12 @@ async def _pipeline(
                 os.unlink(custom_config_path)
             except Exception:
                 pass
+        # Remove the user-provided cookies temp file if one was used.
+        if custom_cookies_path and os.path.isfile(custom_cookies_path):
+            try:
+                os.unlink(custom_cookies_path)
+            except Exception:
+                pass
         logger.info("Cleanup complete for job #%s.", job_id)
 
 
@@ -1368,7 +1504,7 @@ async def _pipeline(
 
 @require_allowed
 async def document_message_handler(client, message) -> None:
-    """Handle document messages sent as replies to a pending config prompt."""
+    """Handle document messages sent as replies to a pending config or cookies prompt."""
     user_id: int = message.from_user.id
     chat_id: int = message.chat.id
 
@@ -1378,13 +1514,16 @@ async def document_message_handler(client, message) -> None:
     reply_to_id: int = message.reply_to_message.id
     for pid, pj in list(_pending.items()):
         if (
-            pj.awaiting_custom_config
-            and pj.user_id == user_id
+            pj.user_id == user_id
             and pj.source_chat_id == chat_id
             and pj.menu_message_id == reply_to_id
         ):
-            await _handle_custom_config_input(client, message, pid, pj)
-            return
+            if pj.awaiting_custom_config:
+                await _handle_custom_config_input(client, message, pid, pj)
+                return
+            if pj.awaiting_custom_cookies:
+                await _handle_custom_cookies_input(client, message, pid, pj)
+                return
 
 
 # ---------------------------------------------------------------------------
