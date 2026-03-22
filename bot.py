@@ -218,25 +218,29 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
 
     config_status = "Applied" if pj.custom_config_path else "None"
     args_status = f"`{pj.custom_args}`" if pj.custom_args else "None"
-    ytdl_status = "On" if pj.ytdl else "Off"
-    ugoira_status = "On" if pj.ugoira_convert else "Off"
-    mkv_status = "On" if pj.ugoira_mkvmerge else "Off"
+
+    # Show a compact summary of any active advanced options.
+    advanced_flags = []
+    if pj.ytdl:
+        advanced_flags.append("yt-dlp")
+    if pj.ugoira_convert:
+        advanced_flags.append("Ugoira")
+    if pj.ugoira_mkvmerge:
+        advanced_flags.append("MKV")
+    advanced_status = ", ".join(advanced_flags) if advanced_flags else "None"
 
     text = (
         f"🔗 **Link:** `{pj.url}`\n\n"
         f"The downloaded files will be uploaded to {dest_label}.\n"
         f"**Custom config:** {config_status}\n"
         f"**Custom args:** {args_status}\n"
-        f"**yt-dlp:** {ytdl_status} | **Ugoira conv:** {ugoira_status} | **MKV timecodes:** {mkv_status}"
+        f"**Advanced:** {advanced_status}"
     )
 
     c_check = " ✓" if pj.use_current_chat else ""
     cu_check = " ✓" if not pj.use_current_chat else ""
     md_check = " ✓" if pj.mode == "default" else ""
     mx_check = " ✓" if pj.mode == "duplex" else ""
-    ytdl_check = " ✓" if pj.ytdl else ""
-    ugo_check = " ✓" if pj.ugoira_convert else ""
-    mkv_check = " ✓" if pj.ugoira_mkvmerge else ""
 
     markup = InlineKeyboardMarkup(
         [
@@ -266,7 +270,37 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
             ],
             [
                 InlineKeyboardButton(
-                    f"🎬 ytdl{ytdl_check}", callback_data=f"gdl:ytdl:{pid}"
+                    "⚡ Advanced", callback_data=f"gdl:adv:{pid}"
+                ),
+            ],
+            [
+                InlineKeyboardButton("▶ Run", callback_data=f"gdl:r:{pid}"),
+                InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:x:{pid}"),
+            ],
+        ]
+    )
+    return text, markup
+
+
+def _build_advanced_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
+    """Return *(text, markup)* for the advanced-options sub-menu."""
+    ytdl_check = " ✓" if pj.ytdl else ""
+    ugo_check = " ✓" if pj.ugoira_convert else ""
+    mkv_check = " ✓" if pj.ugoira_mkvmerge else ""
+
+    text = (
+        f"🔗 **Link:** `{pj.url}`\n\n"
+        "⚡ **Advanced options** — toggle flags passed to gallery-dl:\n\n"
+        f"• **yt-dlp{ytdl_check}** — HLS/DASH video streams (`--yt-dlp`)\n"
+        f"• **Ugoira conv{ugo_check}** — Pixiv Ugoira → WebM/MP4 via FFmpeg (`--ugoira-conv`)\n"
+        f"• **MKV timecodes{mkv_check}** — Accurate Ugoira timecodes via mkvmerge (`--ugoira-conv-mkvmerge`)"
+    )
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"🎬 yt-dlp{ytdl_check}", callback_data=f"gdl:ytdl:{pid}"
                 ),
                 InlineKeyboardButton(
                     f"🎞️ Ugoira{ugo_check}", callback_data=f"gdl:ugo:{pid}"
@@ -276,8 +310,7 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
             ],
             [
-                InlineKeyboardButton("▶ Run", callback_data=f"gdl:r:{pid}"),
-                InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:x:{pid}"),
+                InlineKeyboardButton("◀ Back", callback_data=f"gdl:advback:{pid}"),
             ],
         ]
     )
@@ -898,15 +931,15 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
     elif action == "ytdl":
         # Toggle yt-dlp integration for HLS/DASH downloads.
         pj.ytdl = not pj.ytdl
-        menu_text, markup = _build_menu(pid, pj)
-        await msg.edit(menu_text, reply_markup=markup)
-        await callback_query.answer("ytdl " + ("enabled" if pj.ytdl else "disabled") + ".")
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer("yt-dlp " + ("enabled" if pj.ytdl else "disabled") + ".")
 
     elif action == "ugo":
         # Toggle Pixiv Ugoira FFmpeg conversion.
         pj.ugoira_convert = not pj.ugoira_convert
-        menu_text, markup = _build_menu(pid, pj)
-        await msg.edit(menu_text, reply_markup=markup)
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
         await callback_query.answer(
             "Ugoira conversion " + ("enabled" if pj.ugoira_convert else "disabled") + "."
         )
@@ -914,11 +947,23 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
     elif action == "mkv":
         # Toggle mkvmerge-based Ugoira conversion (accurate timecodes).
         pj.ugoira_mkvmerge = not pj.ugoira_mkvmerge
-        menu_text, markup = _build_menu(pid, pj)
-        await msg.edit(menu_text, reply_markup=markup)
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
         await callback_query.answer(
             "MKV timecodes " + ("enabled" if pj.ugoira_mkvmerge else "disabled") + "."
         )
+
+    elif action == "adv":
+        # Open the advanced options sub-menu.
+        adv_text, markup = _build_advanced_menu(pid, pj)
+        await msg.edit(adv_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "advback":
+        # Return to the main menu from the advanced sub-menu.
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
 
     elif action == "r":
         # --- Run: start the download+upload pipeline ---

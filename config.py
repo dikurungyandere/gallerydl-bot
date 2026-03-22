@@ -44,6 +44,11 @@ class Config:
     # that Ugoira files are converted to MKV with accurate per-frame timecodes.
     ugoira_mkvmerge: bool = False
 
+    # Proxy settings (optional).  When set, the proxy is passed to Pyrogram
+    # so all MTProto connections (including file uploads) go through it.
+    # Supported schemes: "socks5", "socks4", "http".
+    proxy: Optional[dict] = None
+
     # Path to a temporary file written from GALLERY_DL_CONFIG_B64 or
     # GALLERY_DL_CONFIG_JSON, if used.
     _temp_config_file: Optional[str] = field(default=None, repr=False)
@@ -158,6 +163,26 @@ def load_config() -> Config:
     ugoira_convert = os.getenv("UGOIRA_CONVERT", "false").strip().lower() in ("true", "1", "yes")
     ugoira_mkvmerge = os.getenv("UGOIRA_MKVMERGE", "false").strip().lower() in ("true", "1", "yes")
 
+    # Optional proxy for Pyrogram MTProto connections.
+    proxy: Optional[dict] = None
+    proxy_scheme = os.getenv("PROXY_SCHEME", "").strip().lower()
+    proxy_hostname = os.getenv("PROXY_HOSTNAME", "").strip()
+    raw_proxy_port = os.getenv("PROXY_PORT", "").strip()
+    if proxy_scheme and proxy_hostname and raw_proxy_port:
+        try:
+            proxy_port = int(raw_proxy_port)
+        except ValueError:
+            raise ValueError(
+                f"PROXY_PORT must be an integer, got: {raw_proxy_port!r}"
+            )
+        proxy = {"scheme": proxy_scheme, "hostname": proxy_hostname, "port": proxy_port}
+        proxy_username = os.getenv("PROXY_USERNAME", "").strip()
+        proxy_password = os.getenv("PROXY_PASSWORD", "").strip()
+        if proxy_username:
+            proxy["username"] = proxy_username
+        if proxy_password:
+            proxy["password"] = proxy_password
+
     cfg = Config(
         api_id=api_id,
         api_hash=api_hash,
@@ -170,6 +195,7 @@ def load_config() -> Config:
         ytdl_enabled=ytdl_enabled,
         ugoira_convert=ugoira_convert,
         ugoira_mkvmerge=ugoira_mkvmerge,
+        proxy=proxy,
     )
     cfg._temp_config_file = temp_config_file
     return cfg
