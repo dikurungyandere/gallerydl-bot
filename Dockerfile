@@ -18,6 +18,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Install build tools required to compile C extensions (e.g. TgCrypto).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies first (better Docker layer caching).
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
