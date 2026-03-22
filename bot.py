@@ -91,6 +91,8 @@ START_TEXT = (
     "• Choose whether to upload to the **current chat** or a **custom channel/group**.\n"
     "• Select **Default** mode (download all → upload all) or **Duplex** mode "
     "(upload each file as soon as it is downloaded).\n"
+    "• Set a **custom gallery-dl config** (file or text) for this job only.\n"
+    "• Add **custom gallery-dl arguments** (e.g. credentials, filters) for this job only.\n"
     "• Press **Run** to start, or **Cancel** to abort.\n\n"
     "Commands:\n"
     "• /start — Show this message\n"
@@ -105,7 +107,8 @@ START_TEXT = (
 HELP_TEXT = (
     "📖 **How to use gallerydl-bot**\n\n"
     "1. Send a URL (e.g. an Instagram post, a Twitter/X post, a Reddit gallery…).\n"
-    "2. A **configuration menu** appears — choose your destination and upload mode.\n"
+    "2. A **configuration menu** appears — choose your destination, upload mode, "
+    "and any custom config or arguments.\n"
     "3. Press **▶ Run** — the bot downloads the media and uploads it one file at a time.\n\n"
     "**Parallel downloads**\n"
     "You can send multiple URLs without waiting — each one gets its own menu and job. "
@@ -118,6 +121,17 @@ HELP_TEXT = (
     "• **Default** — download everything first, then upload files one-by-one.\n"
     "• **Duplex** — upload each file as soon as it finishes downloading, without "
     "waiting for the full gallery.\n\n"
+    "**Custom config (⚙️)**\n"
+    "Click **⚙️ Custom Config** and reply with a gallery-dl config file (send as a "
+    "document) or paste the config text. The custom config overrides the bot's global "
+    "config for this job only. Shows **Applied** in the menu when active. "
+    "Use **🔄 Reset** to clear it.\n\n"
+    "**Custom args (🔧)**\n"
+    "Click **🔧 Custom Args** and reply with extra gallery-dl CLI arguments, e.g.:\n"
+    "`--username myuser --password mypass`\n"
+    "`--filter \"width > 1000\"`\n"
+    "The arguments apply to this job only. Shows the argument string in the menu "
+    "when active. Use **🔄 Reset** to clear them.\n\n"
     "**Limits**\n"
     "• Files larger than ~1950 MB are automatically split into numbered parts\n"
     "  (``.001``, ``.002``, …). Reassemble with: "
@@ -168,6 +182,14 @@ class PendingJob:
     awaiting_custom_input: bool = False
     # Message ID of the configuration menu message (used to match replies).
     menu_message_id: int = 0
+    # Path to a user-provided gallery-dl config file (temp file); None = use bot default.
+    custom_config_path: Optional[str] = None
+    # Extra gallery-dl arguments supplied by the user (raw string); None = none.
+    custom_args: Optional[str] = None
+    # True while waiting for the user to reply with a custom config.
+    awaiting_custom_config: bool = False
+    # True while waiting for the user to reply with custom arguments.
+    awaiting_custom_args: bool = False
 
 
 # pending_id (incrementing int) → PendingJob
@@ -188,9 +210,14 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
     else:
         dest_label = f"`{pj.target_chat_id}`"
 
+    config_status = "Applied" if pj.custom_config_path else "None"
+    args_status = f"`{pj.custom_args}`" if pj.custom_args else "None"
+
     text = (
         f"🔗 **Link:** `{pj.url}`\n\n"
-        f"The downloaded files will be uploaded to {dest_label}."
+        f"The downloaded files will be uploaded to {dest_label}.\n"
+        f"**Custom config:** {config_status}\n"
+        f"**Custom args:** {args_status}"
     )
 
     c_check = " ✓" if pj.use_current_chat else ""
@@ -217,6 +244,14 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    "⚙️ Custom Config", callback_data=f"gdl:cfg:{pid}"
+                ),
+                InlineKeyboardButton(
+                    "🔧 Custom Args", callback_data=f"gdl:arg:{pid}"
+                ),
+            ],
+            [
                 InlineKeyboardButton("▶ Run", callback_data=f"gdl:r:{pid}"),
                 InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:x:{pid}"),
             ],
@@ -240,6 +275,56 @@ def _build_custom_input_prompt(
 
     markup = InlineKeyboardMarkup(
         [[InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:xcu:{pid}")]]
+    )
+    return body, markup
+
+
+def _build_custom_config_prompt(
+    pid: int, pj: PendingJob, error: str = ""
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """Return *(text, markup)* for the custom-config input prompt."""
+    current = "Applied" if pj.custom_config_path else "None (using bot default)"
+    body = (
+        f"🔗 **Link:** `{pj.url}`\n\n"
+        f"**Current custom config:** {current}\n\n"
+        "Please **reply to this message** with your gallery-dl config.\n"
+        "You can send a config file (as a document) or paste the config text directly."
+    )
+    if error:
+        body += f"\n\n⚠️ {error}"
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔄 Reset", callback_data=f"gdl:cfgrst:{pid}"),
+                InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:xcfg:{pid}"),
+            ]
+        ]
+    )
+    return body, markup
+
+
+def _build_custom_args_prompt(
+    pid: int, pj: PendingJob, error: str = ""
+) -> Tuple[str, InlineKeyboardMarkup]:
+    """Return *(text, markup)* for the custom-arguments input prompt."""
+    current = f"`{pj.custom_args}`" if pj.custom_args else "None"
+    body = (
+        f"🔗 **Link:** `{pj.url}`\n\n"
+        f"**Current custom args:** {current}\n\n"
+        "Please **reply to this message** with the extra gallery-dl arguments.\n"
+        "Examples: `--username foo --password bar`, `--filter \"width > 1000\"`"
+    )
+    if error:
+        body += f"\n\n⚠️ {error}"
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔄 Reset", callback_data=f"gdl:argrst:{pid}"),
+                InlineKeyboardButton("✖ Cancel", callback_data=f"gdl:xarg:{pid}"),
+            ]
+        ]
     )
     return body, markup
 
@@ -386,13 +471,20 @@ async def text_message_handler(client, message) -> None:
         reply_to_id: int = message.reply_to_message.id
         for pid, pj in list(_pending.items()):
             if (
-                pj.awaiting_custom_input
-                and pj.user_id == user_id
-                and pj.source_chat_id == chat_id
-                and pj.menu_message_id == reply_to_id
+                pj.user_id != user_id
+                or pj.source_chat_id != chat_id
+                or pj.menu_message_id != reply_to_id
             ):
+                continue
+            if pj.awaiting_custom_input:
                 await _handle_custom_input(client, message, pid, pj)
                 return  # Do not also process as a URL.
+            if pj.awaiting_custom_config:
+                await _handle_custom_config_input(client, message, pid, pj)
+                return
+            if pj.awaiting_custom_args:
+                await _handle_custom_args_input(client, message, pid, pj)
+                return
 
     # --- Check for a URL ---
     match = URL_RE.search(text)
@@ -476,6 +568,132 @@ async def _handle_custom_input(
     pj.target_chat_id = target
     pj.use_current_chat = False
     pj.awaiting_custom_input = False
+
+    if menu_msg:
+        try:
+            menu_text, markup = _build_menu(pid, pj)
+            await menu_msg.edit(menu_text, reply_markup=markup)
+        except Exception:
+            pass
+
+
+async def _handle_custom_config_input(
+    client, message, pid: int, pj: PendingJob
+) -> None:
+    """Apply the custom-config reply (text or document) from the user."""
+    # Try to delete the user's reply to keep the chat clean.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Fetch the menu message so we can edit it.
+    try:
+        menu_msg = await client.get_messages(pj.source_chat_id, pj.menu_message_id)
+    except Exception:
+        menu_msg = None
+
+    new_config_path: Optional[str] = None
+
+    if message.document:
+        # Download the document to a temporary file.
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".conf", delete=False, prefix="gdlbot_cfg_"
+            )
+            tmp.close()
+            await message.download(file_name=tmp.name)
+            new_config_path = tmp.name
+        except Exception as exc:
+            prompt_text, markup = _build_custom_config_prompt(
+                pid, pj, error=f"Failed to download the config file: {exc}"
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+    else:
+        config_text = (message.text or message.caption or "").strip()
+        if not config_text:
+            prompt_text, markup = _build_custom_config_prompt(
+                pid, pj, error="Empty config received. Please send a file or paste config text."
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+        # Write the text to a temp file.
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".conf", delete=False,
+                prefix="gdlbot_cfg_", encoding="utf-8"
+            ) as tmp:
+                tmp.write(config_text)
+            new_config_path = tmp.name
+        except Exception as exc:
+            prompt_text, markup = _build_custom_config_prompt(
+                pid, pj, error=f"Failed to save config: {exc}"
+            )
+            if menu_msg:
+                try:
+                    await menu_msg.edit(prompt_text, reply_markup=markup)
+                except Exception:
+                    pass
+            return
+
+    # Clean up any previously set temp config.
+    if pj.custom_config_path and os.path.isfile(pj.custom_config_path):
+        try:
+            os.unlink(pj.custom_config_path)
+        except Exception:
+            pass
+
+    pj.custom_config_path = new_config_path
+    pj.awaiting_custom_config = False
+
+    if menu_msg:
+        try:
+            menu_text, markup = _build_menu(pid, pj)
+            await menu_msg.edit(menu_text, reply_markup=markup)
+        except Exception:
+            pass
+
+
+async def _handle_custom_args_input(
+    client, message, pid: int, pj: PendingJob
+) -> None:
+    """Apply the custom-args reply from the user."""
+    input_text = (message.text or message.caption or "").strip()
+
+    # Try to delete the user's reply to keep the chat clean.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Fetch the menu message so we can edit it.
+    try:
+        menu_msg = await client.get_messages(pj.source_chat_id, pj.menu_message_id)
+    except Exception:
+        menu_msg = None
+
+    if not input_text:
+        prompt_text, markup = _build_custom_args_prompt(
+            pid, pj, error="Empty arguments received. Please reply with the gallery-dl arguments."
+        )
+        if menu_msg:
+            try:
+                await menu_msg.edit(prompt_text, reply_markup=markup)
+            except Exception:
+                pass
+        return
+
+    pj.custom_args = input_text
+    pj.awaiting_custom_args = False
 
     if menu_msg:
         try:
@@ -589,6 +807,55 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer()
 
+    elif action == "cfg":
+        # Open the custom config prompt.
+        pj.awaiting_custom_config = True
+        prompt_text, markup = _build_custom_config_prompt(pid, pj)
+        await msg.edit(prompt_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "xcfg":
+        # Cancel custom-config input; return to the main menu.
+        pj.awaiting_custom_config = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "cfgrst":
+        # Reset custom config to None; return to the main menu.
+        if pj.custom_config_path and os.path.isfile(pj.custom_config_path):
+            try:
+                os.unlink(pj.custom_config_path)
+            except Exception:
+                pass
+        pj.custom_config_path = None
+        pj.awaiting_custom_config = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer("Custom config reset.")
+
+    elif action == "arg":
+        # Open the custom args prompt.
+        pj.awaiting_custom_args = True
+        prompt_text, markup = _build_custom_args_prompt(pid, pj)
+        await msg.edit(prompt_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "xarg":
+        # Cancel custom-args input; return to the main menu.
+        pj.awaiting_custom_args = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
+
+    elif action == "argrst":
+        # Reset custom args to None; return to the main menu.
+        pj.custom_args = None
+        pj.awaiting_custom_args = False
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer("Custom args reset.")
+
     elif action == "r":
         # --- Run: start the download+upload pipeline ---
         _pending.pop(pid, None)
@@ -607,14 +874,22 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
 
         task = asyncio.create_task(
             _pipeline(
-                job_id, ut, pj.url, temp_dir, pj.target_chat_id, msg, mode=pj.mode
+                job_id, ut, pj.url, temp_dir, pj.target_chat_id, msg,
+                mode=pj.mode,
+                custom_config_path=pj.custom_config_path,
+                custom_args=pj.custom_args,
             )
         )
         ut.task = task
         await callback_query.answer("Starting download…")
 
     elif action == "x":
-        # Cancel the pending configuration.
+        # Cancel the pending configuration; clean up any temp config file.
+        if pj.custom_config_path and os.path.isfile(pj.custom_config_path):
+            try:
+                os.unlink(pj.custom_config_path)
+            except Exception:
+                pass
         _pending.pop(pid, None)
         await msg.edit("❌ Cancelled.")
         await callback_query.answer("Cancelled.")
@@ -631,23 +906,32 @@ async def _pipeline(
     target_chat_id: Union[int, str],
     status_message,
     mode: str = "default",
+    custom_config_path: Optional[str] = None,
+    custom_args: Optional[str] = None,
 ) -> None:
     """Run the full download → upload pipeline for a single job.
 
     Args:
-        job_id:          Unique job identifier (shown in status messages).
-        ut:              The :class:`~task_manager.UserTask` for this job.
-        url:             Gallery URL to download.
-        temp_dir:        Temporary directory for downloaded files.
-        target_chat_id:  Telegram chat to upload files to.
-        status_message:  The :class:`Message` used for status updates.
-        mode:            ``"default"`` — download all files first, then upload
-                         one-by-one.  ``"duplex"`` — upload each file as soon
-                         as it is downloaded, concurrently with remaining
-                         downloads.
+        job_id:             Unique job identifier (shown in status messages).
+        ut:                 The :class:`~task_manager.UserTask` for this job.
+        url:                Gallery URL to download.
+        temp_dir:           Temporary directory for downloaded files.
+        target_chat_id:     Telegram chat to upload files to.
+        status_message:     The :class:`Message` used for status updates.
+        mode:               ``"default"`` — download all files first, then
+                            upload one-by-one.  ``"duplex"`` — upload each
+                            file as soon as it is downloaded, concurrently
+                            with remaining downloads.
+        custom_config_path: Optional path to a user-supplied gallery-dl config
+                            file.  Takes precedence over the bot's global
+                            config.  The file is deleted when the pipeline
+                            finishes.
+        custom_args:        Optional string of extra gallery-dl arguments
+                            (e.g. ``"--username foo --password bar"``).
     """
     last_edit: list = [0.0]
-    config_path = cfg.gallery_dl_config_path if cfg else None
+    # User-supplied config takes precedence over the bot's global config.
+    config_path = custom_config_path or (cfg.gallery_dl_config_path if cfg else None)
 
     # Populate UserTask fields so /status can show live information.
     ut.url = url
@@ -719,6 +1003,7 @@ async def _pipeline(
                 temp_dir=temp_dir,
                 config_path=config_path,
                 on_file=on_file_duplex,
+                extra_args=custom_args,
             )
 
             # Signal the upload loop to stop after draining the queue.
@@ -798,6 +1083,7 @@ async def _pipeline(
                 temp_dir=temp_dir,
                 config_path=config_path,
                 on_file=on_file,
+                extra_args=custom_args,
             )
 
             if ut.cancel_flag:
@@ -898,7 +1184,38 @@ async def _pipeline(
         # ----------------------------------------------------------------
         cleanup_directory(temp_dir)
         task_manager.remove(job_id)
+        # Remove the user-provided config temp file if one was used.
+        if custom_config_path and os.path.isfile(custom_config_path):
+            try:
+                os.unlink(custom_config_path)
+            except Exception:
+                pass
         logger.info("Cleanup complete for job #%s.", job_id)
+
+
+# ---------------------------------------------------------------------------
+# Document message handler (custom config file upload)
+# ---------------------------------------------------------------------------
+
+@require_allowed
+async def document_message_handler(client, message) -> None:
+    """Handle document messages sent as replies to a pending config prompt."""
+    user_id: int = message.from_user.id
+    chat_id: int = message.chat.id
+
+    if not message.reply_to_message:
+        return
+
+    reply_to_id: int = message.reply_to_message.id
+    for pid, pj in list(_pending.items()):
+        if (
+            pj.awaiting_custom_config
+            and pj.user_id == user_id
+            and pj.source_chat_id == chat_id
+            and pj.menu_message_id == reply_to_id
+        ):
+            await _handle_custom_config_input(client, message, pid, pj)
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1259,10 @@ def main() -> None:
                 filters.text
                 & ~filters.command(["start", "help", "stats", "status", "cancel"]),
             )
+        )
+        # Document handler: catches config files sent as replies to the config prompt.
+        client.add_handler(
+            MessageHandler(document_message_handler, filters.document)
         )
         # Inline keyboard button handler.
         client.add_handler(
