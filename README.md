@@ -18,6 +18,7 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
 - ✂️ **Automatic file splitting** — files larger than ~1950 MB are split into numbered parts (`.001`, `.002`, …) so they can be uploaded and manually reassembled: `cat file.mp4.001 file.mp4.002 > file.mp4`
 - 🎬 **Streamable video** — video files are sent as Telegram videos (not documents) with `supports_streaming=True`, so they play directly in the app without downloading
+- 🔍 **Status command** — `/status` shows all your currently active jobs with live progress and a Refresh button
 - ❌ **Cancellation** — `/cancel` stops all jobs; `/cancel <job_id>` stops a specific one
 - 📈 **Stats command** — `/stats` shows CPU, memory, disk usage and active job count
 - 🌐 **Optional Web UI** — a lightweight HTTP status page for PaaS platforms (`WEBUI=true`)
@@ -182,6 +183,7 @@ Copy `.env.example` to `.env` and fill in the values.
 |---|---|
 | `/start` | Show the welcome message |
 | `/help` | Show detailed usage instructions |
+| `/status` | Show all your currently active jobs with live progress and a Refresh button |
 | `/stats` | Show CPU, memory, disk and active job count |
 | `/cancel` | Cancel **all** active downloads/uploads |
 | `/cancel <job_id>` | Cancel a specific job (ID shown in each status message) |
