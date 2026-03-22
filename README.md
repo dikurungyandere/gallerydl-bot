@@ -11,10 +11,12 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📥 **Downloads** via `gallery-dl` — supports hundreds of sites (Instagram, Twitter/X, Reddit, Pixiv, etc.)
 - 📤 **Uploads** back to Telegram using MTProto (bypassing the 50 MB Bot API limit, up to 2 GB per file)
 - ⚡ **Parallel downloads** — send multiple URLs without waiting; each becomes an independent job
-- 🎛️ **Configuration menu** — after sending a URL an inline-keyboard menu lets you choose destination and upload mode before the download begins
+- 🎛️ **Configuration menu** — after sending a URL an inline-keyboard menu lets you choose destination, upload mode, custom config, and custom args before the download begins
 - 📡 **Custom destination** — send files to a different channel or group by picking "Custom chat" in the menu
 - 🔄 **Default mode** — all files are downloaded first, then uploaded to Telegram one-by-one
 - 🚀 **Duplex mode** — each file is uploaded as soon as it finishes downloading, overlapping with the remaining downloads
+- ⚙️ **Custom config** — supply a per-job gallery-dl config file (document upload) or paste config JSON/TOML directly; overrides the bot's global config for that job
+- 🔧 **Custom args** — pass extra gallery-dl CLI arguments per job (e.g. `--username`, `--password`, `--filter`) without touching global settings
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
 - ✂️ **Automatic file splitting** — files larger than ~1950 MB are split into numbered parts (`.001`, `.002`, …) so they can be uploaded and manually reassembled: `cat file.mp4.001 file.mp4.002 > file.mp4`
 - 🎬 **Streamable video** — video files are sent as Telegram videos (not documents) with `supports_streaming=True`, so they play directly in the app without downloading
@@ -198,7 +200,8 @@ download starts:
 |-----|-------------|--------------|
 | 1 | **Current chat** ✓ (default) | **Custom chat** |
 | 2 | **Default** mode ✓ (default) | **Duplex** mode |
-| 3 | **▶ Run** | **✖ Cancel** |
+| 3 | **⚙️ Custom Config** | **🔧 Custom Args** |
+| 4 | **▶ Run** | **✖ Cancel** |
 
 Press **▶ Run** to start the job, or **✖ Cancel** to discard it.
 
@@ -259,7 +262,39 @@ configure the job before it starts.
 | **Default** ✓ | gallery-dl downloads **all** files first; once the download is complete the files are uploaded to Telegram one-by-one. |
 | **Duplex** | Each file is uploaded to Telegram **as soon as it finishes downloading**, without waiting for the rest of the gallery. Downloads and uploads run simultaneously. Useful for large galleries where you want the first files quickly. |
 
-### Run / Cancel (row 3)
+### Custom config (row 3)
+
+| Button | Behaviour |
+|--------|-----------|
+| **⚙️ Custom Config** | Opens a prompt that shows the current config status (**None** / **Applied**) for this job. **Reply** to that prompt with either a **config file** (send it as a Telegram document) or **paste** the config text (JSON or TOML) directly. The custom config takes precedence over the bot's global config for this job only. Use **🔄 Reset** to clear it, or **✖ Cancel** to go back without changing anything. |
+
+The menu message always shows the current state:
+```
+Custom config: None      ← no custom config set
+Custom config: Applied   ← a custom config is active for this job
+```
+
+### Custom args (row 3)
+
+| Button | Behaviour |
+|--------|-----------|
+| **🔧 Custom Args** | Opens a prompt that shows the current extra arguments (**None** / the argument string) for this job. **Reply** to that prompt with any extra `gallery-dl` CLI arguments as a single line of text. Use **🔄 Reset** to clear them, or **✖ Cancel** to go back without changing anything. |
+
+Examples of useful custom args:
+
+```
+--username myuser --password mypass
+--filter "width > 1000"
+--chapter-range 1-5
+```
+
+The menu message always shows the current state:
+```
+Custom args: None
+Custom args: `--username myuser --password mypass`
+```
+
+### Run / Cancel (row 4)
 
 | Button | Behaviour |
 |--------|-----------|
