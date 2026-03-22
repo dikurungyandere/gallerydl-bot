@@ -1737,81 +1737,89 @@ class TestMediaProcessingMenu(unittest.TestCase):
         self.assertFalse(pj.ugoira_mkvmerge)
 
     def test_menu_has_ytdl_button(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj()
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
         self.assertTrue(any("gdl:ytdl:" in d for d in btn_data))
 
     def test_menu_has_ugoira_button(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj()
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
         self.assertTrue(any("gdl:ugo:" in d for d in btn_data))
 
     def test_menu_has_mkv_button(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj()
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
         self.assertTrue(any("gdl:mkv:" in d for d in btn_data))
 
     def test_menu_ytdl_button_shows_check_when_enabled(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj(ytdl=True)
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
-        ytdl_btn = next(b for b in btn_labels if "ytdl" in b)
+        ytdl_btn = next(b for b in btn_labels if "ytdl" in b or "yt-dlp" in b)
         self.assertIn("✓", ytdl_btn)
 
     def test_menu_ytdl_button_no_check_when_disabled(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj(ytdl=False)
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
-        ytdl_btn = next(b for b in btn_labels if "ytdl" in b)
+        ytdl_btn = next(b for b in btn_labels if "ytdl" in b or "yt-dlp" in b)
         self.assertNotIn("✓", ytdl_btn)
 
     def test_menu_ugoira_button_shows_check_when_enabled(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj(ugoira_convert=True)
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
         ugo_btn = next(b for b in btn_labels if "Ugoira" in b)
         self.assertIn("✓", ugo_btn)
 
     def test_menu_mkv_button_shows_check_when_enabled(self):
-        from bot import _build_menu
+        from bot import _build_advanced_menu
         pj = self._make_pj(ugoira_mkvmerge=True)
-        _, markup = _build_menu(1, pj)
+        _, markup = _build_advanced_menu(1, pj)
         btn_labels = [btn.text for row in markup.inline_keyboard for btn in row]
         mkv_btn = next(b for b in btn_labels if "MKV" in b)
         self.assertIn("✓", mkv_btn)
 
     def test_menu_text_shows_ytdl_status(self):
-        from bot import _build_menu
+        # Main menu shows a compact advanced summary; advanced menu shows full status.
+        from bot import _build_menu, _build_advanced_menu
         pj_on = self._make_pj(ytdl=True)
         pj_off = self._make_pj(ytdl=False)
+        # Main menu lists active flags by name.
         text_on, _ = _build_menu(1, pj_on)
         text_off, _ = _build_menu(2, pj_off)
         self.assertIn("yt-dlp", text_on)
-        self.assertIn("On", text_on)
-        self.assertIn("Off", text_off)
+        # Advanced menu shows ✓ when enabled.
+        adv_on, _ = _build_advanced_menu(1, pj_on)
+        adv_off, _ = _build_advanced_menu(2, pj_off)
+        self.assertIn("✓", adv_on)
 
     def test_menu_text_shows_ugoira_status(self):
-        from bot import _build_menu
+        from bot import _build_menu, _build_advanced_menu
         pj = self._make_pj(ugoira_convert=True)
         text, _ = _build_menu(1, pj)
-        self.assertIn("Ugoira conv", text)
-        self.assertIn("On", text)
+        self.assertIn("Ugoira", text)
+        adv_text, _ = _build_advanced_menu(1, pj)
+        self.assertIn("Ugoira", adv_text)
+        self.assertIn("✓", adv_text)
 
     def test_menu_text_shows_mkv_status(self):
-        from bot import _build_menu
+        from bot import _build_menu, _build_advanced_menu
         pj = self._make_pj(ugoira_mkvmerge=True)
         text, _ = _build_menu(1, pj)
-        self.assertIn("MKV timecodes", text)
-        self.assertIn("On", text)
+        self.assertIn("MKV", text)
+        adv_text, _ = _build_advanced_menu(1, pj)
+        self.assertIn("MKV", adv_text)
+        self.assertIn("✓", adv_text)
 
 
 if __name__ == "__main__":

@@ -1369,6 +1369,7 @@ def main() -> None:
             api_id=cfg.api_id,
             api_hash=cfg.api_hash,
             bot_token=cfg.bot_token,
+            proxy=cfg.proxy,
         )
 
         # Register handlers (must be done after Client is created).
