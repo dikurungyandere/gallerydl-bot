@@ -32,6 +32,7 @@ def _build_gallery_dl_cmd(
     ytdl: bool = False,
     ugoira_convert: bool = False,
     ugoira_mkvmerge: bool = False,
+    cookies_path: Optional[str] = None,
 ) -> List[str]:
     """Construct the gallery-dl command list.
 
@@ -51,10 +52,14 @@ def _build_gallery_dl_cmd(
         ugoira_mkvmerge: When ``True``, pass ``--ugoira-conv-mkvmerge`` so
                          gallery-dl produces MKV files with accurate per-frame
                          timecodes using mkvmerge instead of FFmpeg.
+        cookies_path:    Optional path to a Netscape-format cookies file.
+                         Passed to gallery-dl via ``--cookies``.
     """
     cmd = ["gallery-dl", "--dest", dest]
     if config_path:
         cmd.extend(["--config", config_path])
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
     if ytdl:
         cmd.append("--yt-dlp")
     if ugoira_convert:
@@ -77,6 +82,7 @@ async def run_gallery_dl(
     ytdl: bool = False,
     ugoira_convert: bool = False,
     ugoira_mkvmerge: bool = False,
+    cookies_path: Optional[str] = None,
 ) -> List[str]:
     """Run gallery-dl and collect downloaded file paths.
 
@@ -102,6 +108,8 @@ async def run_gallery_dl(
         ugoira_mkvmerge: When ``True``, pass ``--ugoira-conv-mkvmerge`` to
                          produce MKV files with accurate frame timecodes using
                          mkvmerge.
+        cookies_path:    Optional path to a Netscape-format cookies file.
+                         Passed to gallery-dl via ``--cookies``.
 
     Returns:
         Sorted list of absolute paths to all downloaded files (including any
@@ -114,6 +122,7 @@ async def run_gallery_dl(
     cmd = _build_gallery_dl_cmd(
         url, temp_dir, config_path, extra_args,
         ytdl=ytdl, ugoira_convert=ugoira_convert, ugoira_mkvmerge=ugoira_mkvmerge,
+        cookies_path=cookies_path,
     )
     logger.info("Running: %s", " ".join(cmd))
 
