@@ -249,6 +249,7 @@ def load_config() -> Config:
         ugoira_mkvmerge=ugoira_mkvmerge,
         proxy=proxy,
         gallery_dl_cookies_path=gallery_dl_cookies_path,
+
     )
     cfg._temp_config_file = temp_config_file
     cfg._temp_cookies_file = temp_cookies_file

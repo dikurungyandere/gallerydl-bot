@@ -1424,7 +1424,8 @@ class TestBotHelpers(unittest.TestCase):
         pj = self._make_pj(custom_cookies_path=None)
         text, _ = _build_menu(1, pj)
         lines = text.splitlines()
-        ck_line = next(l for l in lines if "Cookies:" in l)
+        ck_line = next((l for l in lines if "Cookies:" in l), None)
+        self.assertIsNotNone(ck_line, "Expected a 'Cookies:' line in the menu text")
         self.assertIn("None", ck_line)
 
     def test_build_menu_shows_cookies_applied_when_set(self):
@@ -1432,7 +1433,8 @@ class TestBotHelpers(unittest.TestCase):
         pj = self._make_pj(custom_cookies_path="/tmp/ck.txt")
         text, _ = _build_menu(1, pj)
         lines = text.splitlines()
-        ck_line = next(l for l in lines if "Cookies:" in l)
+        ck_line = next((l for l in lines if "Cookies:" in l), None)
+        self.assertIsNotNone(ck_line, "Expected a 'Cookies:' line in the menu text")
         self.assertIn("Applied", ck_line)
 
     def test_build_menu_has_cookies_button(self):

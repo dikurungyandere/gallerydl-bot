@@ -841,7 +841,7 @@ async def _handle_custom_cookies_input(
         # Download the document to a temporary file.
         try:
             tmp = tempfile.NamedTemporaryFile(
-                mode="wb", suffix=".txt", delete=False, prefix="gdlbot_ck_"
+                mode="w", suffix=".txt", delete=False, prefix="gdlbot_ck_"
             )
             tmp.close()
             await message.download(file_name=tmp.name)
