@@ -837,6 +837,25 @@ class TestDownloader(unittest.TestCase):
         self.assertIn("--config", cmd)
         self.assertIn("/etc/gdl.conf", cmd)
 
+    def test_build_gallery_dl_cmd_with_extra_args(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd(
+            "https://x.com", "/tmp/d", None,
+            extra_args="--username foo --password bar"
+        )
+        self.assertIn("--username", cmd)
+        self.assertIn("foo", cmd)
+        self.assertIn("--password", cmd)
+        self.assertIn("bar", cmd)
+        # URL must still be the last element.
+        self.assertEqual(cmd[-1], "https://x.com")
+
+    def test_build_gallery_dl_cmd_extra_args_none(self):
+        from downloader import _build_gallery_dl_cmd
+        cmd = _build_gallery_dl_cmd("https://x.com", "/tmp/d", None, extra_args=None)
+        self.assertNotIn("--username", cmd)
+        self.assertEqual(cmd[-1], "https://x.com")
+
     def test_scan_directory(self):
         from downloader import _scan_directory
         with tempfile.TemporaryDirectory() as d:
@@ -1059,11 +1078,11 @@ class TestBotHelpers(unittest.TestCase):
         ]
         self.assertTrue(all(str(pid) in d for d in btn_data))
 
-    def test_build_menu_has_three_rows(self):
+    def test_build_menu_has_four_rows(self):
         from bot import _build_menu
         pj = self._make_pj()
         _, markup = _build_menu(1, pj)
-        self.assertEqual(len(markup.inline_keyboard), 3)
+        self.assertEqual(len(markup.inline_keyboard), 4)
 
     # ------------------------------------------------------------------
     # _build_custom_input_prompt
@@ -1096,6 +1115,158 @@ class TestBotHelpers(unittest.TestCase):
         from bot import _build_custom_input_prompt
         pj = self._make_pj()
         text, _ = _build_custom_input_prompt(2, pj)
+        self.assertNotIn("⚠️", text)
+
+    # ------------------------------------------------------------------
+    # PendingJob new fields
+    # ------------------------------------------------------------------
+
+    def test_pending_job_new_fields_default_to_none(self):
+        from bot import PendingJob
+        pj = PendingJob(
+            url="https://x.com/p",
+            user_id=1,
+            source_chat_id=10,
+            target_chat_id=10,
+        )
+        self.assertIsNone(pj.custom_config_path)
+        self.assertIsNone(pj.custom_args)
+        self.assertFalse(pj.awaiting_custom_config)
+        self.assertFalse(pj.awaiting_custom_args)
+
+    # ------------------------------------------------------------------
+    # _build_menu: custom config / args status in text
+    # ------------------------------------------------------------------
+
+    def test_build_menu_shows_none_for_custom_config_and_args(self):
+        from bot import _build_menu
+        pj = self._make_pj(custom_config_path=None, custom_args=None)
+        text, _ = _build_menu(1, pj)
+        self.assertIn("Custom config:", text)
+        self.assertIn("Custom args:", text)
+        # Both should show "None" when unset.
+        lines = text.splitlines()
+        config_line = next(l for l in lines if "Custom config:" in l)
+        args_line = next(l for l in lines if "Custom args:" in l)
+        self.assertIn("None", config_line)
+        self.assertIn("None", args_line)
+
+    def test_build_menu_shows_applied_when_custom_config_set(self):
+        from bot import _build_menu
+        pj = self._make_pj(custom_config_path="/tmp/some_config.conf")
+        text, _ = _build_menu(1, pj)
+        lines = text.splitlines()
+        config_line = next(l for l in lines if "Custom config:" in l)
+        self.assertIn("Applied", config_line)
+
+    def test_build_menu_shows_args_when_custom_args_set(self):
+        from bot import _build_menu
+        pj = self._make_pj(custom_args="--username foo --password bar")
+        text, _ = _build_menu(1, pj)
+        self.assertIn("--username foo --password bar", text)
+
+    def test_build_menu_has_custom_config_and_args_buttons(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        _, markup = _build_menu(1, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:cfg:" in d for d in btn_data))
+        self.assertTrue(any("gdl:arg:" in d for d in btn_data))
+
+    # ------------------------------------------------------------------
+    # _build_custom_config_prompt
+    # ------------------------------------------------------------------
+
+    def test_build_custom_config_prompt_contains_url(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj(url="https://example.com/p")
+        text, markup = _build_custom_config_prompt(3, pj)
+        self.assertIn("https://example.com/p", text)
+
+    def test_build_custom_config_prompt_shows_none_when_unset(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj(custom_config_path=None)
+        text, _ = _build_custom_config_prompt(3, pj)
+        self.assertIn("None", text)
+
+    def test_build_custom_config_prompt_shows_applied_when_set(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj(custom_config_path="/tmp/cfg.conf")
+        text, _ = _build_custom_config_prompt(3, pj)
+        self.assertIn("Applied", text)
+
+    def test_build_custom_config_prompt_has_reset_and_cancel_buttons(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj()
+        _, markup = _build_custom_config_prompt(3, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:cfgrst:" in d for d in btn_data))
+        self.assertTrue(any("gdl:xcfg:" in d for d in btn_data))
+
+    def test_build_custom_config_prompt_error_shown(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_config_prompt(3, pj, error="Download failed.")
+        self.assertIn("Download failed.", text)
+
+    def test_build_custom_config_prompt_no_error_by_default(self):
+        from bot import _build_custom_config_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_config_prompt(3, pj)
+        self.assertNotIn("⚠️", text)
+
+    # ------------------------------------------------------------------
+    # _build_custom_args_prompt
+    # ------------------------------------------------------------------
+
+    def test_build_custom_args_prompt_contains_url(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj(url="https://example.com/g")
+        text, markup = _build_custom_args_prompt(4, pj)
+        self.assertIn("https://example.com/g", text)
+
+    def test_build_custom_args_prompt_shows_none_when_unset(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj(custom_args=None)
+        text, _ = _build_custom_args_prompt(4, pj)
+        self.assertIn("None", text)
+
+    def test_build_custom_args_prompt_shows_current_args(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj(custom_args="--username alice")
+        text, _ = _build_custom_args_prompt(4, pj)
+        self.assertIn("--username alice", text)
+
+    def test_build_custom_args_prompt_has_reset_and_cancel_buttons(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj()
+        _, markup = _build_custom_args_prompt(4, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:argrst:" in d for d in btn_data))
+        self.assertTrue(any("gdl:xarg:" in d for d in btn_data))
+
+    def test_build_custom_args_prompt_error_shown(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_args_prompt(4, pj, error="Empty arguments received.")
+        self.assertIn("Empty arguments received.", text)
+
+    def test_build_custom_args_prompt_no_error_by_default(self):
+        from bot import _build_custom_args_prompt
+        pj = self._make_pj()
+        text, _ = _build_custom_args_prompt(4, pj)
         self.assertNotIn("⚠️", text)
 
 

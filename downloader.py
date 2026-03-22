@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 from typing import Callable, Awaitable, List, Optional
 
 from task_manager import UserTask
@@ -27,6 +28,7 @@ def _build_gallery_dl_cmd(
     url: str,
     dest: str,
     config_path: Optional[str],
+    extra_args: Optional[str] = None,
 ) -> List[str]:
     """Construct the gallery-dl command list.
 
@@ -34,10 +36,15 @@ def _build_gallery_dl_cmd(
         url:         The URL to download.
         dest:        Destination directory for downloaded files.
         config_path: Optional path to a gallery-dl config file.
+        extra_args:  Optional string of extra gallery-dl arguments (e.g.
+                     ``"--username foo --password bar"``).  Parsed with
+                     :mod:`shlex` so quoted tokens are handled correctly.
     """
     cmd = ["gallery-dl", "--dest", dest]
     if config_path:
         cmd.extend(["--config", config_path])
+    if extra_args:
+        cmd.extend(shlex.split(extra_args))
     cmd.append(url)
     return cmd
 
@@ -48,6 +55,7 @@ async def run_gallery_dl(
     temp_dir: str,
     config_path: Optional[str],
     on_file: Callable[[str], Awaitable[None]],
+    extra_args: Optional[str] = None,
 ) -> List[str]:
     """Run gallery-dl and collect downloaded file paths.
 
@@ -64,6 +72,8 @@ async def run_gallery_dl(
                      as soon as gallery-dl reports it on stdout.  Use this to
                      upload files immediately rather than waiting for the whole
                      batch to finish.
+        extra_args:  Optional string of extra gallery-dl arguments (e.g.
+                     ``"--username foo --password bar"``).
 
     Returns:
         Sorted list of absolute paths to all downloaded files (including any
@@ -73,7 +83,7 @@ async def run_gallery_dl(
         RuntimeError: If gallery-dl exits with a non-zero code.
         asyncio.CancelledError: If cancellation was requested.
     """
-    cmd = _build_gallery_dl_cmd(url, temp_dir, config_path)
+    cmd = _build_gallery_dl_cmd(url, temp_dir, config_path, extra_args)
     logger.info("Running: %s", " ".join(cmd))
 
     process = await asyncio.create_subprocess_exec(
