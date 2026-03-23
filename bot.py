@@ -1288,7 +1288,7 @@ async def _pipeline(
 
             upload_task = asyncio.create_task(_upload_loop())
 
-            files = await run_gallery_dl(
+            files, gdl_stderr = await run_gallery_dl(
                 ut=ut,
                 url=url,
                 temp_dir=temp_dir,
@@ -1310,11 +1310,17 @@ async def _pipeline(
                 return
 
             if not files:
+                error_detail = (
+                    f"\n\ngallery-dl error:\n<code>{gdl_stderr[:500]}</code>"
+                    if gdl_stderr
+                    else ""
+                )
                 await safe_edit_message(
                     status_message,
                     (
                         "⚠️ No files were downloaded.\n"
                         "The URL may be invalid, private, or unsupported by gallery-dl."
+                        + error_detail
                     ),
                     last_edit,
                     force=True,
@@ -1372,7 +1378,7 @@ async def _pipeline(
                     last_edit,
                 )
 
-            files = await run_gallery_dl(
+            files, gdl_stderr = await run_gallery_dl(
                 ut=ut,
                 url=url,
                 temp_dir=temp_dir,
@@ -1389,11 +1395,17 @@ async def _pipeline(
                 return
 
             if not files:
+                error_detail = (
+                    f"\n\ngallery-dl error:\n<code>{gdl_stderr[:500]}</code>"
+                    if gdl_stderr
+                    else ""
+                )
                 await safe_edit_message(
                     status_message,
                     (
                         "⚠️ No files were downloaded.\n"
                         "The URL may be invalid, private, or unsupported by gallery-dl."
+                        + error_detail
                     ),
                     last_edit,
                     force=True,

@@ -1522,7 +1522,7 @@ class TestDuplexPipeline(unittest.TestCase):
             for p in files_on_disk:
                 queued_paths.append(p)
                 await on_file(p)
-            return files_on_disk
+            return files_on_disk, ""
 
         async def fake_upload_files(client, target_chat_id, ut, files,
                                     status_message, show_completion=True,

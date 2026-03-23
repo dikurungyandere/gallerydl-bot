@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import shlex
-from typing import Callable, Awaitable, List, Optional
+from typing import Callable, Awaitable, List, Optional, Tuple
 
 from task_manager import UserTask
 
@@ -83,7 +83,7 @@ async def run_gallery_dl(
     ugoira_convert: bool = False,
     ugoira_mkvmerge: bool = False,
     cookies_path: Optional[str] = None,
-) -> List[str]:
+) -> Tuple[List[str], str]:
     """Run gallery-dl and collect downloaded file paths.
 
     There is intentionally no timeout: large gallery downloads can take hours
@@ -112,11 +112,13 @@ async def run_gallery_dl(
                          Passed to gallery-dl via ``--cookies``.
 
     Returns:
-        Sorted list of absolute paths to all downloaded files (including any
-        that were not reported via stdout and discovered by directory scan).
+        A tuple of:
+        - Sorted list of absolute paths to all downloaded files (including any
+          that were not reported via stdout and discovered by directory scan).
+        - The stderr output from gallery-dl (decoded, stripped), or an empty
+          string if none was captured.
 
     Raises:
-        RuntimeError: If gallery-dl exits with a non-zero code.
         asyncio.CancelledError: If cancellation was requested.
     """
     cmd = _build_gallery_dl_cmd(
@@ -161,30 +163,30 @@ async def run_gallery_dl(
     if ut.cancel_flag:
         raise asyncio.CancelledError("Download cancelled by user.")
 
-    # Even if gallery-dl returns non-zero, we still try to recover files already
-    # written to disk (it sometimes returns 1 for partial successes).
+    # Collect stderr output for error reporting to the user.
+    stderr_text = ""
+    if process.stderr is not None:
+        try:
+            stderr_bytes = await asyncio.wait_for(
+                process.stderr.read(), timeout=5
+            )
+            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        except asyncio.TimeoutError:
+            pass
+
     return_code = process.returncode
     if return_code not in (0, None):
-        # Collect stderr for a better error message.
-        stderr_bytes = b""
-        if process.stderr is not None:
-            try:
-                stderr_bytes = await asyncio.wait_for(
-                    process.stderr.read(), timeout=5
-                )
-            except asyncio.TimeoutError:
-                pass
         logger.warning(
             "gallery-dl exited with code %s. stderr: %s",
             return_code,
-            stderr_bytes.decode("utf-8", errors="replace")[:500],
+            stderr_text[:500],
         )
 
     # Scan the directory for any files gallery-dl wrote there (stdout may have
     # reported relative paths or nothing at all on some extractors).
     disk_files = _scan_directory(temp_dir)
     all_files = sorted(set(disk_files))
-    return all_files
+    return all_files, stderr_text
 
 
 def _scan_directory(path: str) -> List[str]:
