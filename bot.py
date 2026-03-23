@@ -56,6 +56,20 @@ logger = logging.getLogger(__name__)
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 
+# Maximum number of gallery-dl stderr characters shown to the user.
+_STDERR_DISPLAY_LIMIT = 500
+
+
+def _format_gdl_error(stderr_text: str) -> str:
+    """Return a user-facing error detail string from gallery-dl stderr output.
+
+    Returns an empty string when *stderr_text* is empty.
+    """
+    if not stderr_text:
+        return ""
+    return f"\n\ngallery-dl error:\n<code>{html.escape(stderr_text[:_STDERR_DISPLAY_LIMIT])}</code>"
+
+
 # ---------------------------------------------------------------------------
 # Module-level config (populated in main()).
 # ---------------------------------------------------------------------------
@@ -1311,17 +1325,12 @@ async def _pipeline(
                 return
 
             if not files:
-                error_detail = (
-                    f"\n\ngallery-dl error:\n<code>{html.escape(gdl_stderr[:500])}</code>"
-                    if gdl_stderr
-                    else ""
-                )
                 await safe_edit_message(
                     status_message,
                     (
                         "⚠️ No files were downloaded.\n"
                         "The URL may be invalid, private, or unsupported by gallery-dl."
-                        + error_detail
+                        + _format_gdl_error(gdl_stderr)
                     ),
                     last_edit,
                     force=True,
@@ -1396,17 +1405,12 @@ async def _pipeline(
                 return
 
             if not files:
-                error_detail = (
-                    f"\n\ngallery-dl error:\n<code>{html.escape(gdl_stderr[:500])}</code>"
-                    if gdl_stderr
-                    else ""
-                )
                 await safe_edit_message(
                     status_message,
                     (
                         "⚠️ No files were downloaded.\n"
                         "The URL may be invalid, private, or unsupported by gallery-dl."
-                        + error_detail
+                        + _format_gdl_error(gdl_stderr)
                     ),
                     last_edit,
                     force=True,
