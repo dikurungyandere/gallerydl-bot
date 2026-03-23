@@ -24,6 +24,7 @@ Usage:
 """
 
 import asyncio
+import html
 import logging
 import os
 import tempfile
@@ -1311,7 +1312,7 @@ async def _pipeline(
 
             if not files:
                 error_detail = (
-                    f"\n\ngallery-dl error:\n<code>{gdl_stderr[:500]}</code>"
+                    f"\n\ngallery-dl error:\n<code>{html.escape(gdl_stderr[:500])}</code>"
                     if gdl_stderr
                     else ""
                 )
@@ -1396,7 +1397,7 @@ async def _pipeline(
 
             if not files:
                 error_detail = (
-                    f"\n\ngallery-dl error:\n<code>{gdl_stderr[:500]}</code>"
+                    f"\n\ngallery-dl error:\n<code>{html.escape(gdl_stderr[:500])}</code>"
                     if gdl_stderr
                     else ""
                 )
