@@ -911,6 +911,136 @@ class TestUploader(unittest.TestCase):
         from uploader import _file_caption
         self.assertIsNone(_file_caption("/downloads/unknownfile"))
 
+    # ------------------------------------------------------------------
+    # delete_after_upload (eco mode) tests
+    # ------------------------------------------------------------------
+
+    def test_upload_delete_after_upload_removes_file(self):
+        """When delete_after_upload=True, each file is deleted after upload."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+        mock_status.delete = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        asyncio.run(
+            upload_files(
+                client=mock_client,
+                target_chat_id=target,
+                ut=ut,
+                files=[path],
+                status_message=mock_status,
+                show_completion=False,
+                delete_after_upload=True,
+            )
+        )
+
+        self.assertFalse(os.path.exists(path), "File should be deleted after upload.")
+
+    def test_upload_delete_after_upload_false_keeps_file(self):
+        """When delete_after_upload=False (default), files are not deleted."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_photo = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            f.write(b"\xff\xd8\xff" + b"x" * 100)
+            path = f.name
+
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=False,
+                    delete_after_upload=False,
+                )
+            )
+            self.assertTrue(os.path.exists(path), "File should remain on disk.")
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_upload_delete_after_upload_deletes_split_original(self):
+        """When delete_after_upload=True, the original file of split parts is deleted."""
+        from uploader import upload_files
+        from task_manager import UserTask
+        import tempfile
+
+        mock_client = MagicMock()
+        mock_client.send_document = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mock_status = AsyncMock()
+
+        ut = UserTask(user_id=1)
+        target = -1001234567890
+
+        # Create a file that will be split (use a tiny max_size via monkeypatching
+        # split_large_file to simulate split behaviour).
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            f.write(b"A" * 20)
+            path = f.name
+
+        # Manually create two "part" files and patch split_large_file so
+        # upload_files sees them as pre-split parts.
+        part1 = path + ".001"
+        part2 = path + ".002"
+        with open(part1, "wb") as p:
+            p.write(b"A" * 10)
+        with open(part2, "wb") as p:
+            p.write(b"A" * 10)
+
+        import uploader as uploader_mod
+
+        original_split = uploader_mod.split_large_file
+
+        def fake_split(p, max_size=None):
+            if p == path:
+                return [part1, part2]
+            return [p]
+
+        uploader_mod.split_large_file = fake_split
+        try:
+            asyncio.run(
+                upload_files(
+                    client=mock_client,
+                    target_chat_id=target,
+                    ut=ut,
+                    files=[path],
+                    status_message=mock_status,
+                    show_completion=False,
+                    delete_after_upload=True,
+                )
+            )
+        finally:
+            uploader_mod.split_large_file = original_split
+
+        self.assertFalse(os.path.exists(part1), "Part .001 should be deleted.")
+        self.assertFalse(os.path.exists(part2), "Part .002 should be deleted.")
+        self.assertFalse(os.path.exists(path), "Split original should be deleted.")
+
 
 # ---------------------------------------------------------------------------
 # downloader.py tests
@@ -1189,6 +1319,33 @@ class TestBotHelpers(unittest.TestCase):
         duplex_btn = next(b for b in btn_labels if "Duplex" in b)
         self.assertNotIn("✓", default_btn)
         self.assertIn("✓", duplex_btn)
+
+    def test_build_menu_eco_mode_selected(self):
+        from bot import _build_menu
+        pj = self._make_pj(mode="eco")
+        _, markup = _build_menu(1, pj)
+        btn_labels = [
+            btn.text
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        default_btn = next(b for b in btn_labels if "Default" in b)
+        duplex_btn = next(b for b in btn_labels if "Duplex" in b)
+        eco_btn = next(b for b in btn_labels if "Eco" in b)
+        self.assertNotIn("✓", default_btn)
+        self.assertNotIn("✓", duplex_btn)
+        self.assertIn("✓", eco_btn)
+
+    def test_build_menu_has_eco_button(self):
+        from bot import _build_menu
+        pj = self._make_pj()
+        _, markup = _build_menu(1, pj)
+        btn_data = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        self.assertTrue(any("gdl:eco:" in d for d in btn_data))
 
     def test_build_menu_has_run_and_cancel_buttons(self):
         from bot import _build_menu

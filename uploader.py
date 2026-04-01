@@ -122,6 +122,7 @@ async def upload_files(
     url: str = "",
     job_id: int = 0,
     mode: str = "default",
+    delete_after_upload: bool = False,
 ) -> None:
     """Upload all *files* to *target_chat_id* one-by-one.
 
@@ -132,20 +133,23 @@ async def upload_files(
     app without downloading.
 
     Args:
-        client:          Pyrogram ``Client`` instance.
-        target_chat_id:  The Telegram chat/channel/group to send files to.
-                         Can be an integer ID or a ``@username`` string.
-        ut:              The :class:`~task_manager.UserTask` for this job.
-        files:           List of local file paths to upload.
-        status_message:  The status :class:`Message` to update with progress.
-        show_completion: When ``True`` (default), send a new summary message
-                         after all files are sent.  Set to ``False`` when
-                         calling this function repeatedly (e.g. once per file
-                         in streaming mode) so the final message is only shown
-                         once.
-        url:             Source URL, embedded in the progress and summary messages.
-        job_id:          Unique job identifier, embedded in the progress messages.
-        mode:            ``"default"`` or ``"duplex"``, shown in progress messages.
+        client:               Pyrogram ``Client`` instance.
+        target_chat_id:       The Telegram chat/channel/group to send files to.
+                              Can be an integer ID or a ``@username`` string.
+        ut:                   The :class:`~task_manager.UserTask` for this job.
+        files:                List of local file paths to upload.
+        status_message:       The status :class:`Message` to update with progress.
+        show_completion:      When ``True`` (default), send a new summary message
+                              after all files are sent.  Set to ``False`` when
+                              calling this function repeatedly (e.g. once per file
+                              in streaming mode) so the final message is only shown
+                              once.
+        url:                  Source URL, embedded in the progress and summary messages.
+        job_id:               Unique job identifier, embedded in the progress messages.
+        mode:                 ``"default"``, ``"duplex"``, or ``"eco"``, shown in
+                              progress messages.
+        delete_after_upload:  When ``True``, each local file is deleted immediately
+                              after it has been successfully uploaded (eco mode).
 
     Raises:
         CancelUploadException: If the user requested cancellation mid-upload.
@@ -158,6 +162,9 @@ async def upload_files(
         expanded_files.extend(parts)
 
     total_files = len(expanded_files)
+    # Compute total size before any deletions so the completion summary is
+    # accurate even when delete_after_upload=True removes files mid-loop.
+    total_size = sum(os.path.getsize(f) for f in expanded_files if os.path.isfile(f))
 
     for file_idx, file_path in enumerate(expanded_files, start=1):
         if ut.cancel_flag:
@@ -235,10 +242,31 @@ async def upload_files(
         except CancelUploadException:
             raise asyncio.CancelledError("Upload cancelled by user.")
 
+        if delete_after_upload:
+            try:
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+                    logger.debug("Eco: deleted %s after upload.", file_path)
+            except Exception as exc:
+                logger.warning("Eco: failed to delete %s: %s", file_path, exc)
+
+    if delete_after_upload:
+        # Remove original files that were split into parts (parts are already
+        # deleted in the per-file loop above; expanded_files contains the part
+        # paths, not the original, when splitting occurred).
+        expanded_set = set(expanded_files)
+        for f in files:
+            if f in expanded_set:
+                # Not split — already deleted in the per-file loop; skip.
+                continue
+            try:
+                if os.path.isfile(f):
+                    os.unlink(f)
+                    logger.debug("Eco: deleted split original %s after upload.", f)
+            except Exception as exc:
+                logger.warning("Eco: failed to delete split original %s: %s", f, exc)
+
     if show_completion:
-        total_size = sum(
-            os.path.getsize(f) for f in expanded_files if os.path.isfile(f)
-        )
         summary = (
             f"✅ **Upload completed**\n\n"
             f"🔗 **Link:** `{url}`\n"
