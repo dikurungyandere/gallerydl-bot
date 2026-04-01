@@ -198,6 +198,8 @@ class PendingJob:
     use_current_chat: bool = True
     # "default" → download all, then upload one-by-one.
     # "duplex"  → upload each file as soon as it is downloaded.
+    # "eco"     → like duplex, but each file is deleted from the server
+    #             immediately after a successful upload.
     mode: str = "default"
     # True while we are waiting for the user to reply with a custom chat ID.
     awaiting_custom_input: bool = False
@@ -268,6 +270,7 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
     cu_check = " ✓" if not pj.use_current_chat else ""
     md_check = " ✓" if pj.mode == "default" else ""
     mx_check = " ✓" if pj.mode == "duplex" else ""
+    eco_check = " ✓" if pj.mode == "eco" else ""
 
     markup = InlineKeyboardMarkup(
         [
@@ -285,6 +288,9 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                 ),
                 InlineKeyboardButton(
                     f"Duplex{mx_check}", callback_data=f"gdl:mx:{pid}"
+                ),
+                InlineKeyboardButton(
+                    f"Eco{eco_check}", callback_data=f"gdl:eco:{pid}"
                 ),
             ],
             [
@@ -1023,6 +1029,13 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer()
 
+    elif action == "eco":
+        # Select eco mode.
+        pj.mode = "eco"
+        menu_text, markup = _build_menu(pid, pj)
+        await msg.edit(menu_text, reply_markup=markup)
+        await callback_query.answer()
+
     elif action == "cfg":
         # Open the custom config prompt.
         pj.awaiting_custom_config = True
@@ -1244,16 +1257,17 @@ async def _pipeline(
     ut.mode = mode
     ut.progress_text = "⏳ Starting download…"
 
-    # upload_task is only used in duplex mode; keep a reference so we can
+    # upload_task is only used in duplex/eco mode; keep a reference so we can
     # cancel it in exception handlers.
     upload_task: Optional[asyncio.Task] = None
 
     try:
-        if mode == "duplex":
+        if mode in ("duplex", "eco"):
             # ----------------------------------------------------------------
-            # Duplex mode: producer-consumer with asyncio.Queue.
+            # Duplex / Eco mode: producer-consumer with asyncio.Queue.
             # The downloader puts file paths in the queue; the uploader
-            # drains it one file at a time.
+            # drains it one file at a time.  In eco mode each file is deleted
+            # from the server immediately after a successful upload.
             # ----------------------------------------------------------------
             file_queue: asyncio.Queue = asyncio.Queue()
             # Track files queued via stdout so we can upload any extra ones
@@ -1269,7 +1283,8 @@ async def _pipeline(
                 n_downloaded += 1
                 queued_files.add(path)
                 await file_queue.put(path)
-                progress = f"📥 Downloading… {n_downloaded} file(s) · uploading…"
+                action_label = "uploading & deleting…" if mode == "eco" else "uploading…"
+                progress = f"📥 Downloading… {n_downloaded} file(s) · {action_label}"
                 ut.progress_text = progress
                 await safe_edit_message(
                     status_message,
@@ -1297,6 +1312,7 @@ async def _pipeline(
                             url=url,
                             job_id=job_id,
                             mode=mode,
+                            delete_after_upload=(mode == "eco"),
                         )
                     finally:
                         file_queue.task_done()
@@ -1351,6 +1367,7 @@ async def _pipeline(
                     url=url,
                     job_id=job_id,
                     mode=mode,
+                    delete_after_upload=(mode == "eco"),
                 )
 
             if not ut.cancel_flag:
