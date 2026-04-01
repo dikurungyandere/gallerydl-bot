@@ -162,6 +162,9 @@ async def upload_files(
         expanded_files.extend(parts)
 
     total_files = len(expanded_files)
+    # Compute total size before any deletions so the completion summary is
+    # accurate even when delete_after_upload=True removes files mid-loop.
+    total_size = sum(os.path.getsize(f) for f in expanded_files if os.path.isfile(f))
 
     for file_idx, file_path in enumerate(expanded_files, start=1):
         if ut.cancel_flag:
@@ -248,9 +251,14 @@ async def upload_files(
                 logger.warning("Eco: failed to delete %s: %s", file_path, exc)
 
     if delete_after_upload:
-        # Remove original files that were split into parts (parts deleted
-        # above; the original file still remains on disk after splitting).
+        # Remove original files that were split into parts (parts are already
+        # deleted in the per-file loop above; expanded_files contains the part
+        # paths, not the original, when splitting occurred).
+        expanded_set = set(expanded_files)
         for f in files:
+            if f in expanded_set:
+                # Not split — already deleted in the per-file loop; skip.
+                continue
             try:
                 if os.path.isfile(f):
                     os.unlink(f)
@@ -259,9 +267,6 @@ async def upload_files(
                 logger.warning("Eco: failed to delete split original %s: %s", f, exc)
 
     if show_completion:
-        total_size = sum(
-            os.path.getsize(f) for f in expanded_files if os.path.isfile(f)
-        )
         summary = (
             f"✅ **Upload completed**\n\n"
             f"🔗 **Link:** `{url}`\n"
