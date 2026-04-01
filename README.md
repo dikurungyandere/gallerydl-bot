@@ -18,6 +18,7 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 📡 **Custom destination** — send files to a different channel or group by picking "Custom chat" in the menu
 - 🔄 **Default mode** — all files are downloaded first, then uploaded to Telegram one-by-one
 - 🚀 **Duplex mode** — each file is uploaded as soon as it finishes downloading, overlapping with the remaining downloads
+- ♻️ **Eco mode** — duplex-style streaming upload plus automatic per-file deletion after successful upload to minimize server disk usage
 - ⚙️ **Custom config** — supply a per-job gallery-dl config file (document upload) or paste config JSON/TOML directly; overrides the bot's global config for that job
 - 🔧 **Custom args** — pass extra gallery-dl CLI arguments per job (e.g. `--username`, `--password`, `--filter`) without touching global settings
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
@@ -202,13 +203,13 @@ Send any supported URL as a plain message. The bot replies with a
 **configuration menu** (inline keyboard) where you set your options before the
 download starts:
 
-| Row | Left button | Right button |
-|-----|-------------|--------------|
-| 1 | **Current chat** ✓ (default) | **Custom chat** |
-| 2 | **Default** mode ✓ (default) | **Duplex** mode |
-| 3 | **⚙️ Custom Config** | **🔧 Custom Args** |
-| 4 | **🎬 ytdl** | **🎞️ Ugoira** | **📼 MKV** |
-| 5 | **▶ Run** | **✖ Cancel** |
+| Row | Buttons |
+|-----|---------|
+| 1 | **Current chat** ✓ (default), **Custom chat** |
+| 2 | **Default** mode ✓ (default), **Duplex** mode, **Eco** mode |
+| 3 | **⚙️ Custom Config**, **🔧 Custom Args** |
+| 4 | **🍪 Cookies**, **⚡ Advanced** |
+| 5 | **▶ Run**, **✖ Cancel** |
 
 Press **▶ Run** to start the job, or **✖ Cancel** to discard it.
 
@@ -268,6 +269,7 @@ configure the job before it starts.
 |--------|-----------|
 | **Default** ✓ | gallery-dl downloads **all** files first; once the download is complete the files are uploaded to Telegram one-by-one. |
 | **Duplex** | Each file is uploaded to Telegram **as soon as it finishes downloading**, without waiting for the rest of the gallery. Downloads and uploads run simultaneously. Useful for large galleries where you want the first files quickly. |
+| **Eco** | Same streaming behavior as **Duplex**, but after each file is uploaded successfully it is deleted from local storage immediately. This minimizes temporary disk usage during large jobs. |
 
 ### Custom config (row 3)
 
@@ -301,7 +303,14 @@ Custom args: None
 Custom args: `--username myuser --password mypass`
 ```
 
-### Media processing (row 4)
+### Cookies + Advanced (row 4)
+
+| Button | Behaviour |
+|--------|-----------|
+| **🍪 Cookies** | Opens a prompt for per-job cookies. Reply with a Netscape cookies file (document) or paste cookie text directly. Use **🔄 Reset** to clear it, or **✖ Cancel** to go back. |
+| **⚡ Advanced** | Opens the advanced options sub-menu (row 4 media-processing toggles shown below). |
+
+### Media processing (advanced sub-menu)
 
 | Button | Behaviour |
 |--------|-----------|
