@@ -1455,10 +1455,13 @@ async def _pipeline(
                     last_edit,
                     force=True,
                 )
-                zip_path = os.path.join(temp_dir, "archive.zip")
-                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for file_path in files:
-                        zf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
+                zip_path = os.path.join(temp_dir, f"archive_{job_id}.zip")
+                try:
+                    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        for file_path in files:
+                            zf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to create zip archive: {exc}") from exc
                 await safe_edit_message(
                     status_message,
                     format_status_message(
