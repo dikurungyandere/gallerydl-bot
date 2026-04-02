@@ -4,11 +4,14 @@ it back to the user using Pyrogram (MTProto).
 
 When a URL is detected the bot presents an inline-keyboard configuration menu
 so the user can choose the destination chat and the upload mode before the
-download starts.  Two upload modes are supported:
+download starts.  Three upload modes are supported:
 
 * **Default** – download all files first, then upload them one-by-one.
+* **Zip**     – download all files first, pack them into a zip archive, then
+  upload the archive as a single file.
 * **Duplex**  – start uploading each file as soon as it is downloaded, without
-  waiting for the entire gallery to finish.
+  waiting for the entire gallery to finish; each file is deleted from local
+  storage immediately after a successful upload.
 
 Files larger than ~1950 MB are automatically split into numbered parts so they
 can be uploaded within Telegram's per-file limit and manually reassembled.
@@ -28,6 +31,7 @@ import html
 import logging
 import os
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Union
 
@@ -197,9 +201,9 @@ class PendingJob:
     # False → upload to a user-supplied custom target.
     use_current_chat: bool = True
     # "default" → download all, then upload one-by-one.
-    # "duplex"  → upload each file as soon as it is downloaded.
-    # "eco"     → like duplex, but each file is deleted from the server
-    #             immediately after a successful upload.
+    # "zip"     → download all, zip everything into one archive, then upload.
+    # "duplex"  → upload each file as soon as it is downloaded, then delete
+    #             it from local storage immediately after a successful upload.
     mode: str = "default"
     # True while we are waiting for the user to reply with a custom chat ID.
     awaiting_custom_input: bool = False
@@ -269,8 +273,8 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
     c_check = " ✓" if pj.use_current_chat else ""
     cu_check = " ✓" if not pj.use_current_chat else ""
     md_check = " ✓" if pj.mode == "default" else ""
+    zip_check = " ✓" if pj.mode == "zip" else ""
     mx_check = " ✓" if pj.mode == "duplex" else ""
-    eco_check = " ✓" if pj.mode == "eco" else ""
 
     markup = InlineKeyboardMarkup(
         [
@@ -287,10 +291,10 @@ def _build_menu(pid: int, pj: PendingJob) -> Tuple[str, InlineKeyboardMarkup]:
                     f"Default{md_check}", callback_data=f"gdl:md:{pid}"
                 ),
                 InlineKeyboardButton(
-                    f"Duplex{mx_check}", callback_data=f"gdl:mx:{pid}"
+                    f"Zip{zip_check}", callback_data=f"gdl:zip:{pid}"
                 ),
                 InlineKeyboardButton(
-                    f"Eco{eco_check}", callback_data=f"gdl:eco:{pid}"
+                    f"Duplex{mx_check}", callback_data=f"gdl:mx:{pid}"
                 ),
             ],
             [
@@ -1022,16 +1026,16 @@ async def callback_query_handler(client, callback_query: CallbackQuery) -> None:
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer()
 
-    elif action == "mx":
-        # Select duplex mode.
-        pj.mode = "duplex"
+    elif action == "zip":
+        # Select zip mode.
+        pj.mode = "zip"
         menu_text, markup = _build_menu(pid, pj)
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer()
 
-    elif action == "eco":
-        # Select eco mode.
-        pj.mode = "eco"
+    elif action == "mx":
+        # Select duplex mode.
+        pj.mode = "duplex"
         menu_text, markup = _build_menu(pid, pj)
         await msg.edit(menu_text, reply_markup=markup)
         await callback_query.answer()
@@ -1225,9 +1229,12 @@ async def _pipeline(
         target_chat_id:      Telegram chat to upload files to.
         status_message:      The :class:`Message` used for status updates.
         mode:                ``"default"`` — download all files first, then
-                             upload one-by-one.  ``"duplex"`` — upload each
+                             upload one-by-one.  ``"zip"`` — download all
+                             files first, zip them into one archive, then
+                             upload the archive.  ``"duplex"`` — upload each
                              file as soon as it is downloaded, concurrently
-                             with remaining downloads.
+                             with remaining downloads, then delete it from
+                             local storage after a successful upload.
         custom_config_path:  Optional path to a user-supplied gallery-dl config
                              file.  Takes precedence over the bot's global
                              config.  The file is deleted when the pipeline
@@ -1257,17 +1264,17 @@ async def _pipeline(
     ut.mode = mode
     ut.progress_text = "⏳ Starting download…"
 
-    # upload_task is only used in duplex/eco mode; keep a reference so we can
+    # upload_task is only used in duplex mode; keep a reference so we can
     # cancel it in exception handlers.
     upload_task: Optional[asyncio.Task] = None
 
     try:
-        if mode in ("duplex", "eco"):
+        if mode == "duplex":
             # ----------------------------------------------------------------
-            # Duplex / Eco mode: producer-consumer with asyncio.Queue.
+            # Duplex mode: producer-consumer with asyncio.Queue.
             # The downloader puts file paths in the queue; the uploader
-            # drains it one file at a time.  In eco mode each file is deleted
-            # from the server immediately after a successful upload.
+            # drains it one file at a time.  Each file is deleted from local
+            # storage immediately after a successful upload.
             # ----------------------------------------------------------------
             file_queue: asyncio.Queue = asyncio.Queue()
             # Track files queued via stdout so we can upload any extra ones
@@ -1283,8 +1290,7 @@ async def _pipeline(
                 n_downloaded += 1
                 queued_files.add(path)
                 await file_queue.put(path)
-                action_label = "uploading & deleting…" if mode == "eco" else "uploading…"
-                progress = f"📥 Downloading… {n_downloaded} file(s) · {action_label}"
+                progress = f"📥 Downloading… {n_downloaded} file(s) · uploading & deleting…"
                 ut.progress_text = progress
                 await safe_edit_message(
                     status_message,
@@ -1312,7 +1318,7 @@ async def _pipeline(
                             url=url,
                             job_id=job_id,
                             mode=mode,
-                            delete_after_upload=(mode == "eco"),
+                            delete_after_upload=True,
                         )
                     finally:
                         file_queue.task_done()
@@ -1367,7 +1373,7 @@ async def _pipeline(
                     url=url,
                     job_id=job_id,
                     mode=mode,
-                    delete_after_upload=(mode == "eco"),
+                    delete_after_upload=True,
                 )
 
             if not ut.cancel_flag:
@@ -1388,7 +1394,7 @@ async def _pipeline(
 
         else:
             # ----------------------------------------------------------------
-            # Default mode: download all → upload all.
+            # Default / Zip mode: download all → (zip →) upload.
             # ----------------------------------------------------------------
             n_downloaded = 0
 
@@ -1434,28 +1440,73 @@ async def _pipeline(
                 )
                 return
 
-            await safe_edit_message(
-                status_message,
-                format_status_message(
-                    url,
-                    job_id,
-                    mode,
-                    f"✅ Downloaded {len(files)} file(s). Uploading…",
-                ),
-                last_edit,
-                force=True,
-            )
-            await upload_files(
-                client=client,
-                target_chat_id=target_chat_id,
-                ut=ut,
-                files=files,
-                status_message=status_message,
-                show_completion=True,
-                url=url,
-                job_id=job_id,
-                mode=mode,
-            )
+            if mode == "zip":
+                # ------------------------------------------------------------
+                # Zip mode: pack all downloaded files into a single archive.
+                # ------------------------------------------------------------
+                await safe_edit_message(
+                    status_message,
+                    format_status_message(
+                        url,
+                        job_id,
+                        mode,
+                        f"✅ Downloaded {len(files)} file(s). Creating zip archive…",
+                    ),
+                    last_edit,
+                    force=True,
+                )
+                zip_path = os.path.join(temp_dir, f"archive_{job_id}.zip")
+                try:
+                    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                        for file_path in files:
+                            zf.write(file_path, arcname=os.path.relpath(file_path, temp_dir))
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to create zip archive: {exc}") from exc
+                await safe_edit_message(
+                    status_message,
+                    format_status_message(
+                        url,
+                        job_id,
+                        mode,
+                        "📦 Archive ready. Uploading…",
+                    ),
+                    last_edit,
+                    force=True,
+                )
+                await upload_files(
+                    client=client,
+                    target_chat_id=target_chat_id,
+                    ut=ut,
+                    files=[zip_path],
+                    status_message=status_message,
+                    show_completion=True,
+                    url=url,
+                    job_id=job_id,
+                    mode=mode,
+                )
+            else:
+                await safe_edit_message(
+                    status_message,
+                    format_status_message(
+                        url,
+                        job_id,
+                        mode,
+                        f"✅ Downloaded {len(files)} file(s). Uploading…",
+                    ),
+                    last_edit,
+                    force=True,
+                )
+                await upload_files(
+                    client=client,
+                    target_chat_id=target_chat_id,
+                    ut=ut,
+                    files=files,
+                    status_message=status_message,
+                    show_completion=True,
+                    url=url,
+                    job_id=job_id,
+                    mode=mode,
+                )
 
     except asyncio.CancelledError:
         logger.info("Pipeline cancelled for job #%s.", job_id)

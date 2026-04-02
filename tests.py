@@ -639,6 +639,19 @@ class TestUtils(unittest.TestCase):
         self.assertIn("Duplex", result)
         self.assertNotIn("Default", result)
 
+    def test_format_status_message_zip_mode(self):
+        """format_status_message shows 'Zip' for zip mode."""
+        from utils import format_status_message
+        result = format_status_message(
+            url="https://example.com",
+            job_id=5,
+            mode="zip",
+            progress_content="📥 Downloading…",
+        )
+        self.assertIn("Zip", result)
+        self.assertNotIn("Default", result)
+        self.assertNotIn("Duplex", result)
+
     def test_format_status_message_contains_progress_header(self):
         """format_status_message labels the progress section."""
         from utils import format_status_message
@@ -912,7 +925,7 @@ class TestUploader(unittest.TestCase):
         self.assertIsNone(_file_caption("/downloads/unknownfile"))
 
     # ------------------------------------------------------------------
-    # delete_after_upload (eco mode) tests
+    # delete_after_upload (duplex mode) tests
     # ------------------------------------------------------------------
 
     def test_upload_delete_after_upload_removes_file(self):
@@ -1320,9 +1333,9 @@ class TestBotHelpers(unittest.TestCase):
         self.assertNotIn("✓", default_btn)
         self.assertIn("✓", duplex_btn)
 
-    def test_build_menu_eco_mode_selected(self):
+    def test_build_menu_zip_mode_selected(self):
         from bot import _build_menu
-        pj = self._make_pj(mode="eco")
+        pj = self._make_pj(mode="zip")
         _, markup = _build_menu(1, pj)
         btn_labels = [
             btn.text
@@ -1331,12 +1344,12 @@ class TestBotHelpers(unittest.TestCase):
         ]
         default_btn = next(b for b in btn_labels if "Default" in b)
         duplex_btn = next(b for b in btn_labels if "Duplex" in b)
-        eco_btn = next(b for b in btn_labels if "Eco" in b)
+        zip_btn = next(b for b in btn_labels if "Zip" in b)
         self.assertNotIn("✓", default_btn)
         self.assertNotIn("✓", duplex_btn)
-        self.assertIn("✓", eco_btn)
+        self.assertIn("✓", zip_btn)
 
-    def test_build_menu_has_eco_button(self):
+    def test_build_menu_has_zip_button(self):
         from bot import _build_menu
         pj = self._make_pj()
         _, markup = _build_menu(1, pj)
@@ -1345,7 +1358,7 @@ class TestBotHelpers(unittest.TestCase):
             for row in markup.inline_keyboard
             for btn in row
         ]
-        self.assertTrue(any("gdl:eco:" in d for d in btn_data))
+        self.assertTrue(any("gdl:zip:" in d for d in btn_data))
 
     def test_build_menu_has_run_and_cancel_buttons(self):
         from bot import _build_menu
@@ -1683,7 +1696,8 @@ class TestDuplexPipeline(unittest.TestCase):
 
         async def fake_upload_files(client, target_chat_id, ut, files,
                                     status_message, show_completion=True,
-                                    url="", job_id=0, mode="default"):
+                                    url="", job_id=0, mode="default",
+                                    delete_after_upload=False):
             pass  # No-op; we only verify it was called.
 
         with tempfile.TemporaryDirectory() as tmp:

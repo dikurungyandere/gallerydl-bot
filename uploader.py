@@ -146,10 +146,10 @@ async def upload_files(
                               once.
         url:                  Source URL, embedded in the progress and summary messages.
         job_id:               Unique job identifier, embedded in the progress messages.
-        mode:                 ``"default"``, ``"duplex"``, or ``"eco"``, shown in
+        mode:                 ``"default"``, ``"zip"``, or ``"duplex"``, shown in
                               progress messages.
         delete_after_upload:  When ``True``, each local file is deleted immediately
-                              after it has been successfully uploaded (eco mode).
+                              after it has been successfully uploaded (duplex mode).
 
     Raises:
         CancelUploadException: If the user requested cancellation mid-upload.
@@ -246,9 +246,9 @@ async def upload_files(
             try:
                 if os.path.isfile(file_path):
                     os.unlink(file_path)
-                    logger.debug("Eco: deleted %s after upload.", file_path)
+                    logger.debug("Duplex: deleted %s after upload.", file_path)
             except Exception as exc:
-                logger.warning("Eco: failed to delete %s: %s", file_path, exc)
+                logger.warning("Duplex: failed to delete %s: %s", file_path, exc)
 
     if delete_after_upload:
         # Remove original files that were split into parts (parts are already
@@ -262,9 +262,9 @@ async def upload_files(
             try:
                 if os.path.isfile(f):
                     os.unlink(f)
-                    logger.debug("Eco: deleted split original %s after upload.", f)
+                    logger.debug("Duplex: deleted split original %s after upload.", f)
             except Exception as exc:
-                logger.warning("Eco: failed to delete split original %s: %s", f, exc)
+                logger.warning("Duplex: failed to delete split original %s: %s", f, exc)
 
     if show_completion:
         summary = (

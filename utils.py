@@ -101,14 +101,19 @@ def format_status_message(
     Args:
         url:              The source URL being processed.
         job_id:           Unique job identifier.
-        mode:             ``"default"`` or ``"duplex"``.
+        mode:             ``"default"``, ``"zip"``, or ``"duplex"``.
         progress_content: The current progress text to embed.
 
     Returns:
         A formatted Telegram-markdown string with link, job ID, mode, progress,
         and a cancel hint.
     """
-    mode_label = "Duplex" if mode == "duplex" else "Default"
+    if mode == "duplex":
+        mode_label = "Duplex"
+    elif mode == "zip":
+        mode_label = "Zip"
+    else:
+        mode_label = "Default"
     return (
         f"🔗 **Link:** `{url}`\n"
         f"**Job ID:** `{job_id}`\n"
