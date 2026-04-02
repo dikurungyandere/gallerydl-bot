@@ -206,7 +206,7 @@ download starts:
 | Row | Buttons |
 |-----|---------|
 | 1 | **Current chat** ✓ (default), **Custom chat** |
-| 2 | **Default** mode ✓ (default), **Duplex** mode, **Eco** mode |
+| 2 | **Default** mode ✓ (default), **Zip** mode, **Duplex** mode |
 | 3 | **⚙️ Custom Config**, **🔧 Custom Args** |
 | 4 | **🍪 Cookies**, **⚡ Advanced** |
 | 5 | **▶ Run**, **✖ Cancel** |
