@@ -17,8 +17,8 @@ A Telegram bot that downloads media from any [gallery-dl](https://github.com/mik
 - 🎛️ **Configuration menu** — after sending a URL an inline-keyboard menu lets you choose destination, upload mode, custom config, and custom args before the download begins
 - 📡 **Custom destination** — send files to a different channel or group by picking "Custom chat" in the menu
 - 🔄 **Default mode** — all files are downloaded first, then uploaded to Telegram one-by-one
-- 🚀 **Duplex mode** — each file is uploaded as soon as it finishes downloading, overlapping with the remaining downloads
-- ♻️ **Eco mode** — duplex-style streaming upload plus automatic per-file deletion after successful upload to minimize server disk usage
+- 📦 **Zip mode** — all files are downloaded first, then packed into a single zip archive which is uploaded as one easy download
+- 🚀 **Duplex mode** — each file is uploaded as soon as it finishes downloading, overlapping with the remaining downloads, and deleted from local storage immediately after upload to minimize disk usage
 - ⚙️ **Custom config** — supply a per-job gallery-dl config file (document upload) or paste config JSON/TOML directly; overrides the bot's global config for that job
 - 🔧 **Custom args** — pass extra gallery-dl CLI arguments per job (e.g. `--username`, `--password`, `--filter`) without touching global settings
 - 📊 **Progress reporting** — live download and upload progress with a text progress bar
@@ -268,8 +268,8 @@ configure the job before it starts.
 | Button | Behaviour |
 |--------|-----------|
 | **Default** ✓ | gallery-dl downloads **all** files first; once the download is complete the files are uploaded to Telegram one-by-one. |
-| **Duplex** | Each file is uploaded to Telegram **as soon as it finishes downloading**, without waiting for the rest of the gallery. Downloads and uploads run simultaneously. Useful for large galleries where you want the first files quickly. |
-| **Eco** | Same streaming behavior as **Duplex**, but after each file is uploaded successfully it is deleted from local storage immediately. This minimizes temporary disk usage during large jobs. |
+| **Zip** | gallery-dl downloads **all** files first; once the download is complete all files are packed into a single **zip archive** which is then uploaded. Users receive one easy-to-download file. |
+| **Duplex** | Each file is uploaded to Telegram **as soon as it finishes downloading**, without waiting for the rest of the gallery. Downloads and uploads run simultaneously, and each file is deleted from local storage immediately after upload to minimize disk usage. |
 
 ### Custom config (row 3)
 
